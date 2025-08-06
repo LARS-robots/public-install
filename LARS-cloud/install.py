@@ -21,7 +21,7 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
-REPO_URL = "https://github.com/LARS-robots/public-install/main/LARS-cloud/lars-cloud.tar.gz"
+REPO_URL = "https://github.com/LARS-robots/public-install/raw/main/LARS-cloud/lars-cloud.tar.gz"
 INSTALL_DIR = "LARS-cloud"
 
 
