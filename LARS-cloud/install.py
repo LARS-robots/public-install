@@ -24,7 +24,6 @@ from pathlib import Path
 REPO_URL = "https://github.com/LARS-robots/public-install/raw/main/LARS-cloud/lars-cloud.tar.gz"
 INSTALL_DIR = "LARS-cloud"
 
-
 def check_command(command):
     """Проверяет наличие команды в системе"""
     return shutil.which(command) is not None

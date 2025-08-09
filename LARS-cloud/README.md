@@ -3,7 +3,7 @@
 ## Быстрая установка (работает везде)
 
 ```bash
-python3 -c "import urllib.request; urllib.request.urlretrieve('https://github.com/LARS-robots/public-install/raw/main/LARS-cloud/install.py', 'install.py'); import subprocess; subprocess.run(['python3', 'install.py'])"
+curl -sSL https://github.com/LARS-robots/public-install/raw/main/LARS-cloud/install.py | python3
 ```
 
 ## Альтернативные способы скачать install.py:
