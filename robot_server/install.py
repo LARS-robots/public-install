@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-LARS Robot Server Installer
-Downloads and installs LARS robot server from GitHub archive.
+LARS Robot Server Installer (fixed, robust)
+- creates a python venv (prefers /usr/bin/python3.11, falls back to /usr/bin/python3)
+- installs requirements into the venv
+- writes/overwrites /etc/systemd/system/lars-robot-server.service and enables+starts it
 """
 
 import os
@@ -12,312 +14,207 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-# Configuration
+# Config
 GITHUB_REPO = "LARS-robots/public-install"
 ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/raw/main/robot_server/robot_server.tar.gz"
 INSTALL_DIR = Path.home() / "LARS"
 VENV_DIR = INSTALL_DIR / "venv"
-PYTHON_BIN_PATH = "/usr/bin/python3.11"  # Python 3.11
-SYSTEMD_DEST_DIR = INSTALL_DIR / "systemd"
-SYSTEMD_TARGET_PATH = Path("/etc/systemd/system/lars-robot-server.service")
+SYSTEMD_TARGET = Path("/etc/systemd/system/lars-robot-server.service")
 
 
-def run_command(cmd, check=True, sudo=False):
+def run_cmd(cmd, check=True, sudo=False):
+    """Run command and print stdout/stderr. Return (rc, stdout, stderr)."""
     if sudo and os.geteuid() != 0:
-        cmd = ["sudo"] + cmd if isinstance(cmd, list) else f"sudo {cmd}"
+        cmd = ["sudo"] + (cmd if isinstance(cmd, list) else [cmd])
     try:
-        result = subprocess.run(
-            cmd, shell=not isinstance(cmd, list), check=check,
-            capture_output=True, text=True
-        )
-        if result.stdout.strip():
-            print(result.stdout.strip())
-        if result.stderr.strip():
-            print(result.stderr.strip())
-        return result.returncode == 0
+        cp = subprocess.run(cmd, shell=not isinstance(cmd, list),
+                            check=check, capture_output=True, text=True)
+        out = cp.stdout.strip()
+        err = cp.stderr.strip()
+        if out:
+            print(out)
+        if err:
+            print(err)
+        return cp.returncode, out, err
     except subprocess.CalledProcessError as e:
-        print(f"❌ Command failed: {e}")
-        return False
+        print("❌ Command failed:", e)
+        return e.returncode, getattr(e, 'stdout', ''), getattr(e, 'stderr', '')
 
 
-def stop_existing_service():
-    """Stop the existing service if it's running"""
-    print("🛑 Stopping existing service if running...")
-    run_command(["sudo", "systemctl", "stop", "lars-robot-server"], check=False)
-    print("✅ Service stopped")
-
-
-def download_and_extract_archive():
-    print("📦 Downloading LARS robot server archive...")
-    temp_dir = Path(tempfile.mkdtemp())
-    archive_path = temp_dir / "robot_server.tar.gz"
-    
+def download_and_extract():
+    print("📦 Downloading archive...")
+    tmp = Path(tempfile.mkdtemp())
+    archive = tmp / "robot_server.tar.gz"
     try:
-        # Add headers to avoid potential GitHub download issues
-        req = urllib.request.Request(ARCHIVE_URL, headers={
-            'User-Agent': 'LARS-Robot-Installer/1.0'
-        })
-        with urllib.request.urlopen(req) as response:
-            with open(archive_path, 'wb') as f:
-                f.write(response.read())
-        print("✅ Archive downloaded")
+        req = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "LARS-installer"})
+        with urllib.request.urlopen(req) as r, open(archive, "wb") as f:
+            f.write(r.read())
     except Exception as e:
-        print(f"❌ Failed to download archive: {e}")
-        print(f"URL: {ARCHIVE_URL}")
+        print("❌ Download failed:", e)
         sys.exit(1)
 
     import tarfile
     try:
-        with tarfile.open(archive_path, 'r:gz') as tar:
-            tar.extractall(temp_dir)
-        
-        print(f"📂 Archive extracted to: {temp_dir}")
-        
-        # List contents to debug
-        print("Archive contents:")
-        for item in temp_dir.rglob("*"):
-            print(f"  {item.relative_to(temp_dir)}")
-
-        # Check for app subdirectory (based on your output)
-        app_dir = temp_dir / "app"
-        if app_dir.exists() and (app_dir / "main.py").exists():
-            print("✅ Found app directory with main.py")
-            return temp_dir, app_dir
-        elif (temp_dir / "main.py").exists():
-            # Files are in the root of the extracted archive
-            print("✅ Found main.py in root")
-            return temp_dir, temp_dir
-        else:
-            raise Exception("No valid robot_server structure found in archive")
-                
+        with tarfile.open(archive, "r:gz") as t:
+            t.extractall(tmp)
     except Exception as e:
-        print(f"❌ Failed to extract archive: {e}")
+        print("❌ Extract failed:", e)
         sys.exit(1)
 
+    # Determine app dir (archive might contain `app/` or `robot_server/`)
+    if (tmp / "app").exists():
+        return tmp, tmp / "app"
+    if (tmp / "robot_server").exists():
+        return tmp, tmp / "robot_server"
+    # fallback: root
+    return tmp, tmp
 
-def create_virtualenv():
-    if not Path(PYTHON_BIN_PATH).exists():
-        print(f"❌ Python 3.11 not found at {PYTHON_BIN_PATH}")
-        # Try alternative Python paths
-        alternatives = ["/usr/bin/python3", "/usr/bin/python"]
-        for alt in alternatives:
-            if Path(alt).exists():
-                print(f"✅ Using alternative Python: {alt}")
-                global PYTHON_BIN_PATH
-                PYTHON_BIN_PATH = alt
-                break
-        else:
-            sys.exit(1)
-    
-    # Always recreate virtual environment to ensure clean state
+
+def find_python():
+    candidates = ["/usr/bin/python3.11", "/usr/bin/python3", shutil.which("python3") or "/usr/bin/python3"]
+    for p in candidates:
+        if Path(p).exists():
+            print(f"✅ Using Python: {p}")
+            return p
+    print("❌ No suitable Python found. Install python3 or python3.11.")
+    sys.exit(1)
+
+
+def make_venv(python_bin):
+    # Remove existing venv for clean state
     if VENV_DIR.exists():
-        print("🧹 Removing existing virtual environment...")
+        print("🧹 Removing existing venv...")
         shutil.rmtree(VENV_DIR)
-    
-    print("🐍 Creating Python virtual environment...")
-    success = run_command([PYTHON_BIN_PATH, "-m", "venv", str(VENV_DIR)], check=False)
-    if not success:
-        print("❌ Failed to create virtual environment")
+    print("🐍 Creating venv...")
+    rc, out, err = run_cmd([python_bin, "-m", "venv", str(VENV_DIR)], check=False)
+    if rc != 0:
+        print("❌ venv creation failed. Ensure python3-venv is installed.")
         sys.exit(1)
-    
-    python_bin = VENV_DIR / "bin" / "python"
-    pip_bin = VENV_DIR / "bin" / "pip"
-    
-    print("📦 Upgrading pip...")
-    success = run_command([str(pip_bin), "install", "--upgrade", "pip"], check=False)
-    if not success:
-        print("⚠️  Pip upgrade failed, continuing anyway...")
-    
-    return python_bin, pip_bin
+    python_in_venv = VENV_DIR / "bin" / "python"
+    pip_in_venv = VENV_DIR / "bin" / "pip"
+    # upgrade pip (best-effort)
+    print("📦 Upgrading pip inside venv (best-effort)...")
+    rc, out, err = run_cmd([str(pip_in_venv), "install", "--upgrade", "pip"], check=False)
+    if rc != 0:
+        print("⚠️ pip upgrade failed (continuing). Check pip stderr above.")
+    return str(python_in_venv), str(pip_in_venv)
 
 
-def create_init_files():
-    print("📝 Creating __init__.py files...")
-    init_files = [
+def ensure_init_files():
+    """Create __init__.py to make imports deterministic (helps old-style imports)."""
+    files = [
         INSTALL_DIR / "robot_server" / "__init__.py",
         INSTALL_DIR / "robot_server" / "routers" / "__init__.py",
-        INSTALL_DIR / "robot_server" / "services" / "__init__.py"
+        INSTALL_DIR / "robot_server" / "services" / "__init__.py",
     ]
-    for init_file in init_files:
-        init_file.parent.mkdir(parents=True, exist_ok=True)
-        init_file.touch()
-    print("✅ Package structure created")
+    for f in files:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if not f.exists():
+            f.touch()
 
 
-def install_systemd_service():
-    service_src = SYSTEMD_DEST_DIR / "lars-robot-server.service"
-    if not service_src.exists():
-        print(f"❌ Service file not found at: {service_src}")
-        print("Available files in systemd directory:")
-        if SYSTEMD_DEST_DIR.exists():
-            for f in SYSTEMD_DEST_DIR.iterdir():
-                print(f"  {f}")
-        else:
-            print("  No systemd directory found")
-        return
+def write_systemd_unit(python_bin):
+    """Write a deterministic systemd unit that uses the venv python."""
+    unit_text = f"""[Unit]
+Description=LARS Robot Server
+After=network-online.target NetworkManager.service
+Wants=network-online.target
 
-    print("🔧 Installing systemd service...")
+[Service]
+User={os.getlogin()}
+Group={os.getlogin()}
+WorkingDirectory={INSTALL_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={python_bin} -m uvicorn robot_server.main:app --host 0.0.0.0 --port 8081
+Restart=always
+RestartSec=2
 
-    service_content = service_src.read_text()
-    # Update paths to match the current installation
-    service_content = service_content.replace(
-        "WorkingDirectory=/home/lars/LARS",
-        f"WorkingDirectory={INSTALL_DIR}"
-    ).replace(
-        "Environment=PYTHONPATH=/home/lars/LARS", 
-        f"Environment=PYTHONPATH={INSTALL_DIR}"
-    ).replace(
-        "/home/lars/LARS/venv/bin/python",
-        str(VENV_DIR / "bin" / "python")
-    ).replace(
-        "LARS.robot_server.main:app",
-        "robot_server.main:app"
-    ).replace(
-        "host 10.42.0.23",
-        "host 0.0.0.0"
-    )
-
-    temp_service = Path("/tmp") / "lars-robot-server.service"
-    temp_service.write_text(service_content)
-
-    print(f"Updated service file content:\n{service_content}")
-
-    # Always overwrite
-    if SYSTEMD_TARGET_PATH.exists():
-        print("🗑️  Removing existing systemd service...")
-        run_command(["sudo", "rm", "-f", str(SYSTEMD_TARGET_PATH)])
-    
-    run_command(["sudo", "cp", str(temp_service), str(SYSTEMD_TARGET_PATH)])
-
-    # Reload, enable, and restart
-    run_command(["sudo", "systemctl", "daemon-reload"])
-    run_command(["sudo", "systemctl", "enable", "lars-robot-server.service"])
-    run_command(["sudo", "systemctl", "start", "lars-robot-server.service"])
-
-    print("✅ Systemd service installed and started")
+[Install]
+WantedBy=multi-user.target
+"""
+    # write temp and copy with sudo, always overwrite
+    tmp = Path("/tmp/lars-robot-server.service")
+    tmp.write_text(unit_text)
+    print("🔧 Installing systemd unit to /etc/systemd/system (overwriting)...")
+    rc, _, _ = run_cmd(["sudo", "cp", str(tmp), str(SYSTEMD_TARGET)], check=False)
+    if rc != 0:
+        print("❌ Failed to copy systemd unit. You may rerun with sudo.")
+        sys.exit(1)
+    run_cmd(["sudo", "systemctl", "daemon-reload"])
+    run_cmd(["sudo", "systemctl", "enable", "lars-robot-server.service"])
+    run_cmd(["sudo", "systemctl", "restart", "lars-robot-server.service"])
+    run_cmd(["sudo", "systemctl", "status", "lars-robot-server", "--no-pager"], check=False)
 
 
-def remove_existing_files():
-    """Remove existing installation files (except venv which is handled separately)"""
-    print("🧹 Removing existing installation files...")
-    
-    files_to_remove = [
-        INSTALL_DIR / "robot_server",
-        INSTALL_DIR / "requirements.txt", 
-        INSTALL_DIR / "setup_wifi.py",
-        INSTALL_DIR / "VERSION",
-        SYSTEMD_DEST_DIR
-    ]
-    
-    for item in files_to_remove:
-        if item.exists():
-            if item.is_dir():
-                print(f"  Removing directory: {item}")
-                shutil.rmtree(item)
+def install():
+    print("🤖 Installing LARS (this will overwrite existing install)...")
+    # stop existing service
+    run_cmd(["sudo", "systemctl", "stop", "lars-robot-server"], check=False)
+    # clean old files
+    print("🧹 Removing old installation (if present)...")
+    for p in ["robot_server", "requirements.txt", "setup_wifi.py", "systemd", "VERSION"]:
+        tgt = INSTALL_DIR / p
+        if tgt.exists():
+            if tgt.is_dir():
+                shutil.rmtree(tgt)
+                print(f"  removed dir {tgt}")
             else:
-                print(f"  Removing file: {item}")
-                item.unlink()
-    
-    print("✅ Existing files removed")
+                tgt.unlink()
+                print(f"  removed file {tgt}")
 
-
-def install_robot_server():
-    print("🤖 Installing LARS Robot Server...")
-    print("🔄 This installation will overwrite existing files")
-    
-    # Stop service before making changes
-    stop_existing_service()
-    
-    # Remove existing files
-    remove_existing_files()
-    
-    temp_dir, app_dir = download_and_extract_archive()
-
+    temp_dir, app_src = download_and_extract()
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Create robot_server directory and copy files from app_dir
     app_dest = INSTALL_DIR / "robot_server"
-    app_dest.mkdir(parents=True, exist_ok=True)
-    
-    print("📁 Installing application files...")
-    # Copy application files to robot_server directory
-    app_files = ["main.py", "deps.py", "state.py"]
-    for file in app_files:
-        src_file = app_dir / file
-        if src_file.exists():
-            print(f"  Copying: {file}")
-            shutil.copy2(src_file, app_dest)
-        else:
-            print(f"  ⚠️  Missing: {file}")
-    
-    # Copy directories (force overwrite)
-    app_dirs = ["routers", "services", "static"]
-    for dir_name in app_dirs:
-        src_dir = app_dir / dir_name
-        if src_dir.exists():
-            dest_dir = app_dest / dir_name
-            print(f"  Copying directory: {dir_name}")
-            if dest_dir.exists():
-                shutil.rmtree(dest_dir)
-            shutil.copytree(src_dir, dest_dir)
-        else:
-            print(f"  ⚠️  Missing directory: {dir_name}")
+    if app_dest.exists():
+        shutil.rmtree(app_dest)
+    print("📁 Copying application files...")
+    shutil.copytree(app_src, app_dest)
+    # copy top-level files (requirements, setup_wifi, VERSION) if present in temp_dir
+    for root_file in ["requirements.txt", "setup_wifi.py", "VERSION"]:
+        src = temp_dir / root_file
+        if src.exists():
+            dest = INSTALL_DIR / root_file
+            if dest.exists():
+                dest.unlink()
+            shutil.copy2(src, dest)
+            print(f"  copied {root_file}")
 
-    # Copy root level files from temp_dir (not app_dir)
-    root_files = ["requirements.txt", "setup_wifi.py", "VERSION"]
-    for file in root_files:
-        src_file = temp_dir / file
-        if src_file.exists():
-            dest_file = INSTALL_DIR / file
-            print(f"  Copying: {file}")
-            if dest_file.exists():
-                dest_file.unlink()
-            shutil.copy2(src_file, dest_file)
-        else:
-            print(f"  ⚠️  Missing: {file}")
+    # copy systemd dir if present
+    src_systemd = temp_dir / "systemd"
+    if src_systemd.exists():
+        dest_systemd = INSTALL_DIR / "systemd"
+        if dest_systemd.exists():
+            shutil.rmtree(dest_systemd)
+        shutil.copytree(src_systemd, dest_systemd)
+        print("  copied systemd directory from archive")
 
-    # Copy systemd directory from temp_dir (not app_dir)
-    systemd_src = temp_dir / "systemd"
-    if systemd_src.exists():
-        print(f"  Copying systemd configuration...")
-        if SYSTEMD_DEST_DIR.exists():
-            shutil.rmtree(SYSTEMD_DEST_DIR)
-        shutil.copytree(systemd_src, SYSTEMD_DEST_DIR)
-        print(f"  ✅ Systemd files copied")
-    else:
-        print(f"  ❌ No systemd directory found")
+    # create __init__ files
+    ensure_init_files()
 
-    print("✅ Files installed")
+    python_choice = find_python()
+    python_bin, pip_bin = make_venv(python_choice)
 
-    create_init_files()
+    # install dependencies if requirements.txt present
+    req = INSTALL_DIR / "requirements.txt"
+    if req.exists():
+        print("📦 Installing requirements into venv (this step may need build deps: build-essential, python3-dev, libffi-dev, ffmpeg etc)...")
+        rc, out, err = run_cmd([pip_bin, "install", "-r", str(req)], check=False)
+        if rc != 0:
+            print("⚠️ Some dependencies failed to install. Check stderr above and install system packages (see README).")
 
-    python_bin, pip_bin = create_virtualenv()
-    req_file = INSTALL_DIR / "requirements.txt"
-    if req_file.exists():
-        print("📦 Installing dependencies in virtual environment...")
-        success = run_command([str(pip_bin), "install", "-r", str(req_file)], check=False)
-        if not success:
-            print("⚠️  Some dependencies may have failed to install")
+    # run setup_wifi (best-effort, sudo)
+    setup_py = INSTALL_DIR / "setup_wifi.py"
+    if setup_py.exists():
+        print("🌐 Running setup_wifi.py (best-effort, may require sudo)...")
+        run_cmd([python_bin, str(setup_py)], sudo=True, check=False)
 
-    setup_wifi_script = INSTALL_DIR / "setup_wifi.py"
-    if setup_wifi_script.exists():
-        print("🌐 Setting up Wi-Fi AP...")
-        run_command([str(python_bin), str(setup_wifi_script)], sudo=True, check=False)
+    # install systemd unit (use the venv python to guarantee correct ExecStart)
+    write_systemd_unit(python_bin)
 
-    install_systemd_service()
-
-    print(f"\n🎉 Installation completed!")
-    print(f"📁 Robot server installed to: {INSTALL_DIR}")
-    print(f"🔧 Service status:")
-    run_command(["sudo", "systemctl", "status", "lars-robot-server", "--no-pager"], check=False)
+    print("🎉 Installation finished. If service failed to start, run:")
+    print("  sudo journalctl -u lars-robot-server -b -n 200 --no-pager")
+    print("  sudo systemctl status lars-robot-server --no-pager")
 
 
 if __name__ == "__main__":
-    try:
-        install_robot_server()
-    except KeyboardInterrupt:
-        print("\n❌ Installation cancelled")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Installation failed: {e}")
-        sys.exit(1)
+    install()
