@@ -19,6 +19,7 @@ INSTALL_DIR = Path.home() / "LARS"
 VENV_DIR = INSTALL_DIR / "venv"
 PYTHON_BIN_PATH = "/usr/bin/python3.11"  # Python 3.11
 SYSTEMD_DEST_DIR = INSTALL_DIR / "systemd"
+SYSTEMD_TARGET_PATH = Path("/etc/systemd/system/lars-robot-server.service")
 
 
 def run_command(cmd, check=True, sudo=False):
@@ -50,8 +51,9 @@ def download_and_extract_archive():
     try:
         with tarfile.open(archive_path, 'r:gz') as tar:
             tar.extractall(temp_dir)
+
         extracted_dir = temp_dir
-        # Check where the app directory is
+        # Determine where the main app folder is
         if (extracted_dir / "app").exists():
             return extracted_dir / "app"
         elif (extracted_dir / "robot_server").exists():
@@ -77,24 +79,56 @@ def create_virtualenv():
 
 
 def create_init_files():
-    """Create __init__.py files to make directories Python packages"""
-    print("📝 Creating Python package __init__.py files...")
+    """Ensure directories are proper Python packages"""
+    print("📝 Creating __init__.py files...")
     init_files = [
         INSTALL_DIR / "robot_server" / "__init__.py",
-        INSTALL_DIR / "robot_server" / "routers" / "__init__.py", 
+        INSTALL_DIR / "robot_server" / "routers" / "__init__.py",
         INSTALL_DIR / "robot_server" / "services" / "__init__.py"
     ]
-    
     for init_file in init_files:
         init_file.parent.mkdir(parents=True, exist_ok=True)
         init_file.touch()
-    
     print("✅ Package structure created")
 
 
-def install_robot_server():
-    print("🤖 LARS Robot Server Installer")
+def install_systemd_service():
+    """Copy systemd service and replace placeholders"""
+    service_src = SYSTEMD_DEST_DIR / "lars-robot-server.service"
+    if not service_src.exists():
+        print("⚠️  Service file not found, skipping systemd installation")
+        return
 
+    print("🔧 Installing systemd service...")
+
+    # Read service template
+    service_content = service_src.read_text()
+
+    # Replace paths with current installation
+    service_content = service_content.replace(
+        "WorkingDirectory=/home/ubuntu/LARS",
+        f"WorkingDirectory={INSTALL_DIR}"
+    ).replace(
+        "Environment=PYTHONPATH=/home/ubuntu/LARS",
+        f"Environment=PYTHONPATH={INSTALL_DIR}"
+    ).replace(
+        "/usr/bin/python3",
+        str(VENV_DIR / "bin" / "python")
+    )
+
+    # Write temporary service file
+    temp_service = Path("/tmp") / "lars-robot-server.service"
+    temp_service.write_text(service_content)
+
+    # Remove old service and copy new one
+    if SYSTEMD_TARGET_PATH.exists():
+        run_command(["sudo", "rm", str(SYSTEMD_TARGET_PATH)])
+    run_command(["sudo", "cp", str(temp_service), str(SYSTEMD_TARGET_PATH)])
+    run_command(["sudo", "systemctl", "daemon-reload"])
+
+
+def install_robot_server():
+    print("🤖 Installing LARS Robot Server...")
     source_dir = download_and_extract_archive()
 
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
@@ -111,7 +145,7 @@ def install_robot_server():
         if src_file.exists():
             shutil.copy2(src_file, INSTALL_DIR / file)
 
-    # Copy systemd files
+    # Copy systemd folder
     systemd_src = source_dir / "systemd"
     if systemd_src.exists():
         if SYSTEMD_DEST_DIR.exists():
@@ -120,12 +154,11 @@ def install_robot_server():
 
     print("✅ Files installed")
 
-    # Create __init__.py files for proper Python package structure
+    # Ensure package structure
     create_init_files()
 
+    # Create virtual environment and install dependencies
     python_bin, pip_bin = create_virtualenv()
-
-    # Install dependencies
     req_file = INSTALL_DIR / "requirements.txt"
     if req_file.exists():
         print("📦 Installing dependencies in virtual environment...")
@@ -136,6 +169,9 @@ def install_robot_server():
     if setup_wifi_script.exists():
         print("🌐 Setting up Wi-Fi AP...")
         run_command([str(python_bin), str(setup_wifi_script)], sudo=True, check=False)
+
+    # Install systemd service
+    install_systemd_service()
 
 
 if __name__ == "__main__":
