@@ -29,34 +29,56 @@ def run_command(cmd, check=True, sudo=False):
     except subprocess.CalledProcessError as e:
         return False
 
+
 def download_and_extract_archive():
     """Download and extract the robot server archive."""
     print("📦 Downloading LARS robot server archive...")
-    
+
     temp_dir = Path(tempfile.mkdtemp())
     archive_path = temp_dir / "robot_server.tar.gz"
-    
+
     try:
         urllib.request.urlretrieve(ARCHIVE_URL, archive_path)
         print("✅ Archive downloaded")
     except Exception as e:
         print(f"❌ Failed to download archive: {e}")
         sys.exit(1)
-    
+
     import tarfile
     try:
+        # Extract with filter to handle deprecation warning
         with tarfile.open(archive_path, 'r:gz') as tar:
-            tar.extractall(temp_dir)
-        
-        # Look for robot_server directory
-        robot_server_dir = temp_dir / "robot_server"
-        if not robot_server_dir.exists():
-            raise Exception("robot_server directory not found in archive")
-        
-        return robot_server_dir
-        
+            # Use filter for Python 3.14+ compatibility
+            if hasattr(tarfile, 'data_filter'):
+                tar.extractall(temp_dir, filter='data')
+            else:
+                tar.extractall(temp_dir)
+
+        # The archive contains files at root level, not in a robot_server subdirectory
+        # So we return temp_dir directly as it contains the extracted files
+        extracted_dir = temp_dir
+
+        # Verify that we have the expected files
+        app_dir = extracted_dir / "app"
+        if not app_dir.exists():
+            # If app doesn't exist at root, check if there's a robot_server subdirectory
+            robot_server_dir = extracted_dir / "robot_server"
+            if robot_server_dir.exists():
+                return robot_server_dir
+            else:
+                raise Exception(
+                    f"Neither 'app' directory nor 'robot_server' directory found in archive. Contents: {list(extracted_dir.iterdir())}")
+
+        return extracted_dir
+
     except Exception as e:
         print(f"❌ Failed to extract archive: {e}")
+        # List contents for debugging
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                print(f"Archive contents: {tar.getnames()[:10]}")  # Show first 10 files
+        except:
+            pass
         sys.exit(1)
 
 def install_robot_server():
