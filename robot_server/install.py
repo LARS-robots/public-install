@@ -76,6 +76,22 @@ def create_virtualenv():
     return python_bin, pip_bin
 
 
+def create_init_files():
+    """Create __init__.py files to make directories Python packages"""
+    print("📝 Creating Python package __init__.py files...")
+    init_files = [
+        INSTALL_DIR / "robot_server" / "__init__.py",
+        INSTALL_DIR / "robot_server" / "routers" / "__init__.py", 
+        INSTALL_DIR / "robot_server" / "services" / "__init__.py"
+    ]
+    
+    for init_file in init_files:
+        init_file.parent.mkdir(parents=True, exist_ok=True)
+        init_file.touch()
+    
+    print("✅ Package structure created")
+
+
 def install_robot_server():
     print("🤖 LARS Robot Server Installer")
 
@@ -104,6 +120,9 @@ def install_robot_server():
 
     print("✅ Files installed")
 
+    # Create __init__.py files for proper Python package structure
+    create_init_files()
+
     python_bin, pip_bin = create_virtualenv()
 
     # Install dependencies
@@ -117,9 +136,6 @@ def install_robot_server():
     if setup_wifi_script.exists():
         print("🌐 Setting up Wi-Fi AP...")
         run_command([str(python_bin), str(setup_wifi_script)], sudo=True, check=False)
-
-    print(
-        f"✅ Installation completed! Place your systemd service file from {SYSTEMD_DEST_DIR} into /etc/systemd/system/ and enable it manually.")
 
 
 if __name__ == "__main__":
