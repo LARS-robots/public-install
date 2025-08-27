@@ -17,8 +17,9 @@ GITHUB_REPO = "LARS-robots/public-install"
 ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/raw/main/robot_server/robot_server.tar.gz"
 INSTALL_DIR = Path.home() / "LARS"
 VENV_DIR = INSTALL_DIR / "venv"
-SERVICE_FILE = "lars-robot-server.service"
-PYTHON_BIN_PATH = "/usr/bin/python3.11"  # Используем конкретный Python 3.11
+PYTHON_BIN_PATH = "/usr/bin/python3.11"  # Python 3.11
+SYSTEMD_DEST_DIR = INSTALL_DIR / "systemd"
+
 
 def run_command(cmd, check=True, sudo=False):
     if sudo and os.geteuid() != 0:
@@ -33,6 +34,7 @@ def run_command(cmd, check=True, sudo=False):
     except subprocess.CalledProcessError:
         return False
 
+
 def download_and_extract_archive():
     print("📦 Downloading LARS robot server archive...")
     temp_dir = Path(tempfile.mkdtemp())
@@ -43,25 +45,25 @@ def download_and_extract_archive():
     except Exception as e:
         print(f"❌ Failed to download archive: {e}")
         sys.exit(1)
+
     import tarfile
     try:
         with tarfile.open(archive_path, 'r:gz') as tar:
             tar.extractall(temp_dir)
         extracted_dir = temp_dir
-        app_dir = extracted_dir / "app"
-        if not app_dir.exists():
-            robot_server_dir = extracted_dir / "robot_server"
-            if robot_server_dir.exists():
-                return robot_server_dir
-            else:
-                raise Exception(f"Neither 'app' nor 'robot_server' directory found in archive.")
-        return extracted_dir
+        # Check where the app directory is
+        if (extracted_dir / "app").exists():
+            return extracted_dir / "app"
+        elif (extracted_dir / "robot_server").exists():
+            return extracted_dir / "robot_server"
+        else:
+            raise Exception("Neither 'app' nor 'robot_server' directory found in archive.")
     except Exception as e:
         print(f"❌ Failed to extract archive: {e}")
         sys.exit(1)
 
+
 def create_virtualenv():
-    """Create a Python 3.11 virtual environment and return python/pip paths."""
     if not Path(PYTHON_BIN_PATH).exists():
         print(f"❌ Python 3.11 not found at {PYTHON_BIN_PATH}")
         sys.exit(1)
@@ -73,67 +75,52 @@ def create_virtualenv():
     run_command([str(pip_bin), "install", "--upgrade", "pip"])
     return python_bin, pip_bin
 
+
 def install_robot_server():
     print("🤖 LARS Robot Server Installer")
+
     source_dir = download_and_extract_archive()
+
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    app_source = source_dir / "app"
+
+    # Copy robot_server folder
     app_dest = INSTALL_DIR / "robot_server"
     if app_dest.exists():
         shutil.rmtree(app_dest)
-    shutil.copytree(app_source, app_dest)
+    shutil.copytree(source_dir, app_dest)
+
+    # Copy extra files
     for file in ["requirements.txt", "setup_wifi.py"]:
-        source = source_dir / file
-        if source.exists():
-            shutil.copy2(source, INSTALL_DIR / file)
-    systemd_source = source_dir / "systemd"
-    systemd_dest = INSTALL_DIR / "systemd"
-    if systemd_dest.exists():
-        shutil.rmtree(systemd_dest)
-    if systemd_source.exists():
-        shutil.copytree(systemd_source, systemd_dest)
+        src_file = source_dir.parent / file if (source_dir.parent / file).exists() else source_dir / file
+        if src_file.exists():
+            shutil.copy2(src_file, INSTALL_DIR / file)
+
+    # Copy systemd files
+    systemd_src = source_dir / "systemd"
+    if systemd_src.exists():
+        if SYSTEMD_DEST_DIR.exists():
+            shutil.rmtree(SYSTEMD_DEST_DIR)
+        shutil.copytree(systemd_src, SYSTEMD_DEST_DIR)
+
     print("✅ Files installed")
 
     python_bin, pip_bin = create_virtualenv()
+
+    # Install dependencies
     req_file = INSTALL_DIR / "requirements.txt"
     if req_file.exists():
         print("📦 Installing dependencies in virtual environment...")
         run_command([str(pip_bin), "install", "-r", str(req_file)])
 
+    # Setup Wi-Fi
     setup_wifi_script = INSTALL_DIR / "setup_wifi.py"
     if setup_wifi_script.exists():
         print("🌐 Setting up Wi-Fi AP...")
         run_command([str(python_bin), str(setup_wifi_script)], sudo=True, check=False)
 
-    service_file = systemd_dest / "lars-robot-server.service"
-    if service_file.exists():
-        print("🔧 Installing systemd service...")
-        service_content = service_file.read_text()
-        service_content = service_content.replace(
-            "WorkingDirectory=/home/ubuntu/LARS",
-            f"WorkingDirectory={INSTALL_DIR}"
-        ).replace(
-            "Environment=PYTHONPATH=/home/ubuntu/LARS",
-            ""
-        ).replace(
-            "robot.robot_server.app.main:app",
-            "robot_server.app.main:app"
-        )
-        service_content = service_content.replace(
-            "/usr/bin/python3",
-            str(python_bin)
-        )
-        temp_service = Path("/tmp") / "lars-robot-server.service"
-        temp_service.write_text(service_content)
-        if run_command(["cp", str(temp_service), "/etc/systemd/system/lars-robot-server.service"], sudo=True):
-            run_command(["systemctl", "daemon-reload"], sudo=True)
-            run_command(["systemctl", "enable", "lars-robot-server"], sudo=True)
-            print("🚀 Starting robot server...")
-            if run_command(["systemctl", "start", "lars-robot-server"], sudo=True):
-                print("✅ Robot server started!")
-                run_command(["systemctl", "status", "lars-robot-server", "--no-pager"], sudo=True, check=False)
-            else:
-                print("⚠️ Failed to start service")
+    print(
+        f"✅ Installation completed! Place your systemd service file from {SYSTEMD_DEST_DIR} into /etc/systemd/system/ and enable it manually.")
+
 
 if __name__ == "__main__":
     try:
