@@ -16,159 +16,124 @@ from pathlib import Path
 GITHUB_REPO = "LARS-robots/public-install"
 ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/raw/main/robot_server/robot_server.tar.gz"
 INSTALL_DIR = Path.home() / "LARS"
+VENV_DIR = INSTALL_DIR / "venv"
 SERVICE_FILE = "lars-robot-server.service"
+PYTHON_BIN_PATH = "/usr/bin/python3.11"  # Используем конкретный Python 3.11
 
 def run_command(cmd, check=True, sudo=False):
-    """Run a shell command."""
     if sudo and os.geteuid() != 0:
         cmd = ["sudo"] + cmd if isinstance(cmd, list) else f"sudo {cmd}"
-    
     try:
-        result = subprocess.run(cmd, shell=not isinstance(cmd, list), check=check, capture_output=True)
+        result = subprocess.run(cmd, shell=not isinstance(cmd, list), check=check, capture_output=True, text=True)
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
         return result.returncode == 0
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         return False
 
-
 def download_and_extract_archive():
-    """Download and extract the robot server archive."""
     print("📦 Downloading LARS robot server archive...")
-
     temp_dir = Path(tempfile.mkdtemp())
     archive_path = temp_dir / "robot_server.tar.gz"
-
     try:
         urllib.request.urlretrieve(ARCHIVE_URL, archive_path)
         print("✅ Archive downloaded")
     except Exception as e:
         print(f"❌ Failed to download archive: {e}")
         sys.exit(1)
-
     import tarfile
     try:
-        # Extract with filter to handle deprecation warning
         with tarfile.open(archive_path, 'r:gz') as tar:
-            # Use filter for Python 3.14+ compatibility
-            if hasattr(tarfile, 'data_filter'):
-                tar.extractall(temp_dir, filter='data')
-            else:
-                tar.extractall(temp_dir)
-
-        # The archive contains files at root level, not in a robot_server subdirectory
-        # So we return temp_dir directly as it contains the extracted files
+            tar.extractall(temp_dir)
         extracted_dir = temp_dir
-
-        # Verify that we have the expected files
         app_dir = extracted_dir / "app"
         if not app_dir.exists():
-            # If app doesn't exist at root, check if there's a robot_server subdirectory
             robot_server_dir = extracted_dir / "robot_server"
             if robot_server_dir.exists():
                 return robot_server_dir
             else:
-                raise Exception(
-                    f"Neither 'app' directory nor 'robot_server' directory found in archive. Contents: {list(extracted_dir.iterdir())}")
-
+                raise Exception(f"Neither 'app' nor 'robot_server' directory found in archive.")
         return extracted_dir
-
     except Exception as e:
         print(f"❌ Failed to extract archive: {e}")
-        # List contents for debugging
-        try:
-            with tarfile.open(archive_path, 'r:gz') as tar:
-                print(f"Archive contents: {tar.getnames()[:10]}")  # Show first 10 files
-        except:
-            pass
         sys.exit(1)
 
+def create_virtualenv():
+    """Create a Python 3.11 virtual environment and return python/pip paths."""
+    if not Path(PYTHON_BIN_PATH).exists():
+        print(f"❌ Python 3.11 not found at {PYTHON_BIN_PATH}")
+        sys.exit(1)
+    if not VENV_DIR.exists():
+        print("🐍 Creating Python 3.11 virtual environment...")
+        run_command([PYTHON_BIN_PATH, "-m", "venv", str(VENV_DIR)])
+    python_bin = VENV_DIR / "bin" / "python"
+    pip_bin = VENV_DIR / "bin" / "pip"
+    run_command([str(pip_bin), "install", "--upgrade", "pip"])
+    return python_bin, pip_bin
 
 def install_robot_server():
-    """Main installation function."""
     print("🤖 LARS Robot Server Installer")
-
-    # 1️⃣ Скачать и распаковать архив
     source_dir = download_and_extract_archive()
-
-    # 2️⃣ Создать директорию установки
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 3️⃣ Копируем приложение
     app_source = source_dir / "app"
     app_dest = INSTALL_DIR / "robot_server"
     if app_dest.exists():
         shutil.rmtree(app_dest)
     shutil.copytree(app_source, app_dest)
-
-    # 4️⃣ Копируем дополнительные файлы
     for file in ["requirements.txt", "setup_wifi.py"]:
         source = source_dir / file
         if source.exists():
             shutil.copy2(source, INSTALL_DIR / file)
-
-    # 5️⃣ Копируем systemd файлы
     systemd_source = source_dir / "systemd"
     systemd_dest = INSTALL_DIR / "systemd"
     if systemd_dest.exists():
         shutil.rmtree(systemd_dest)
     if systemd_source.exists():
         shutil.copytree(systemd_source, systemd_dest)
-
     print("✅ Files installed")
 
-    # 6️⃣ Устанавливаем зависимости
+    python_bin, pip_bin = create_virtualenv()
     req_file = INSTALL_DIR / "requirements.txt"
     if req_file.exists():
-        print("📦 Installing dependencies...")
-        run_command([sys.executable, "-m", "pip", "install", "-r", str(req_file)])
+        print("📦 Installing dependencies in virtual environment...")
+        run_command([str(pip_bin), "install", "-r", str(req_file)])
 
-    # 7️⃣ Настройка Wi-Fi
     setup_wifi_script = INSTALL_DIR / "setup_wifi.py"
     if setup_wifi_script.exists():
         print("🌐 Setting up Wi-Fi AP...")
-        run_command([sys.executable, str(setup_wifi_script)], sudo=True, check=False)
+        run_command([str(python_bin), str(setup_wifi_script)], sudo=True, check=False)
 
-    # 8️⃣ Установка и запуск systemd сервиса
     service_file = systemd_dest / "lars-robot-server.service"
     if service_file.exists():
         print("🔧 Installing systemd service...")
-
-        # Заменяем пути в файле сервиса
         service_content = service_file.read_text()
         service_content = service_content.replace(
             "WorkingDirectory=/home/ubuntu/LARS",
             f"WorkingDirectory={INSTALL_DIR}"
         ).replace(
             "Environment=PYTHONPATH=/home/ubuntu/LARS",
-            f"Environment=PYTHONPATH={INSTALL_DIR}"
+            ""
         ).replace(
             "robot.robot_server.app.main:app",
             "robot_server.app.main:app"
         )
-
+        service_content = service_content.replace(
+            "/usr/bin/python3",
+            str(python_bin)
+        )
         temp_service = Path("/tmp") / "lars-robot-server.service"
         temp_service.write_text(service_content)
-
-        # Перемещаем в systemd
         if run_command(["cp", str(temp_service), "/etc/systemd/system/lars-robot-server.service"], sudo=True):
-            # Перечитываем конфигурацию systemd
             run_command(["systemctl", "daemon-reload"], sudo=True)
-
-            # Включаем автозапуск
             run_command(["systemctl", "enable", "lars-robot-server"], sudo=True)
-
-            # Запускаем сервис
             print("🚀 Starting robot server...")
             if run_command(["systemctl", "start", "lars-robot-server"], sudo=True):
                 print("✅ Robot server started!")
-                print("📶 Network: LARSrobot / LARSrobot1234")
-                print("🌐 Web UI: http://10.42.0.13:8081/docs")
-
-                # Проверка статуса
-                print("📊 Checking service status...")
                 run_command(["systemctl", "status", "lars-robot-server", "--no-pager"], sudo=True, check=False)
             else:
-                print("⚠️  Failed to start service")
-
+                print("⚠️ Failed to start service")
 
 if __name__ == "__main__":
     try:
