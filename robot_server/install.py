@@ -6,9 +6,11 @@ This installer:
  - copies application files into ~/LARS/robot_server,
  - creates a Python venv (prefer python3.11),
  - installs requirements in the venv,
+ - installs pigpio and enables pigpiod service,
  - runs setup_wifi.py (best-effort),
  - copies systemd/lars-robot-server.service from repo into /etc/systemd/system,
    replacing "LARS.robot_server" with "robot_server" if present,
+ - ensures lars-robot-server.service depends on pigpiod.service,
  - enables & starts the service.
 """
 from pathlib import Path
@@ -102,9 +104,21 @@ def copy_app_files(app_src):
         shutil.copytree(src_systemd, dest_systemd)
 
 
+def install_pigpiod():
+    print("Installing pigpio system-wide")
+    run_cmd(["sudo", "apt", "update"], check=True)
+    run_cmd(["sudo", "apt", "install", "pigpio", "python3-pigpio", "-y"], check=True)
+    print("Enabling and starting pigpiod service")
+    run_cmd(["sudo", "systemctl", "enable", "pigpiod"], check=True)
+    run_cmd(["sudo", "systemctl", "start", "pigpiod"], check=True)
+
+
 def install_requirements(pip_bin):
     req = INSTALL_DIR / "requirements.txt"
+    print("Installing pigpio in virtual environment")
+    subprocess.run([pip_bin, "install", "pigpio"], check=False)
     if req.exists():
+        print("Installing requirements from", req)
         subprocess.run([pip_bin, "install", "-r", str(req)], check=False)
 
 
@@ -122,6 +136,12 @@ def install_systemd_unit():
 
     txt = repo_service.read_text()
     txt = txt.replace("LARS.robot_server", "robot_server")  # normalize import path if needed
+    # Ensure dependency on pigpiod.service
+    if "After=network.target" in txt:
+        txt = txt.replace("After=network.target", "After=network.target pigpiod.service")
+    else:
+        # If no After line exists, add it under [Unit]
+        txt = txt.replace("[Unit]", "[Unit]\nAfter=network.target pigpiod.service")
 
     tmp = Path("/tmp/lars-robot-server.service")
     tmp.write_text(txt)
@@ -151,6 +171,7 @@ def main():
     python_choice = find_python_prefer_311()
     venv_python, venv_pip = create_venv(python_choice)
 
+    install_pigpiod()
     install_requirements(venv_pip)
     run_setup_wifi(venv_python)
 
