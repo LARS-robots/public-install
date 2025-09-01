@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-LARS Robot Server Installer — use systemd unit from repo unchanged
-This installer:
- - downloads robot_server archive,
- - copies application files into ~/LARS/robot_server,
- - creates a Python venv (prefer python3.11),
- - installs requirements in the venv,
- - installs pigpio and enables pigpiod service,
- - runs setup_wifi.py (best-effort),
- - copies systemd/lars-robot-server.service from repo into /etc/systemd/system,
-   replacing "LARS.robot_server" with "robot_server" if present,
- - ensures lars-robot-server.service depends on pigpiod.service,
- - enables & starts the service.
+LARS Robot Server Installer (версии без pigpio/pigpiod)
+
+Этот установщик:
+ - скачивает архив robot_server,
+ - копирует файлы приложения в ~/LARS/robot_server,
+ - создает Python venv (предпочтительно python3.11),
+ - устанавливает requirements + gpiozero + lgpio в venv,
+ - ставит системные пакеты gpiozero + lgpio,
+ - запускает setup_wifi.py (best-effort),
+ - копирует systemd/lars-robot-server.service в /etc/systemd/system,
+   заменяя "LARS.robot_server" на "robot_server" при необходимости,
+ - включает и запускает сервис.
 """
+
 from pathlib import Path
 import urllib.request
 import tarfile
@@ -21,7 +22,6 @@ import shutil
 import subprocess
 import sys
 import os
-import re
 
 # -------- CONFIG --------
 GITHUB_REPO = "LARS-robots/public-install"
@@ -65,7 +65,11 @@ def download_and_extract():
 
 
 def find_python_prefer_311():
-    candidates = ["/usr/bin/python3.11", "/usr/bin/python3", shutil.which("python3") or "/usr/bin/python3"]
+    candidates = [
+        "/usr/bin/python3.11",
+        "/usr/bin/python3",
+        shutil.which("python3") or "/usr/bin/python3",
+    ]
     for c in candidates:
         if c and Path(c).exists():
             print("Using python:", c)
@@ -104,19 +108,16 @@ def copy_app_files(app_src):
         shutil.copytree(src_systemd, dest_systemd)
 
 
-def install_pigpiod():
-    print("Installing pigpio system-wide")
+def install_gpio_libs():
+    print("Installing gpiozero + lgpio system-wide")
     run_cmd(["sudo", "apt", "update"], check=True)
-    run_cmd(["sudo", "apt", "install", "pigpio", "python3-pigpio", "-y"], check=True)
-    print("Enabling and starting pigpiod service")
-    run_cmd(["sudo", "systemctl", "enable", "pigpiod"], check=True)
-    run_cmd(["sudo", "systemctl", "start", "pigpiod"], check=True)
+    run_cmd(["sudo", "apt", "install", "-y", "python3-gpiozero", "python3-lgpio", "gpiod"], check=True)
 
 
 def install_requirements(pip_bin):
     req = INSTALL_DIR / "requirements.txt"
-    print("Installing pigpio in virtual environment")
-    subprocess.run([pip_bin, "install", "pigpio"], check=False)
+    print("Installing gpiozero + lgpio in virtual environment")
+    subprocess.run([pip_bin, "install", "gpiozero", "lgpio"], check=False)
     if req.exists():
         print("Installing requirements from", req)
         subprocess.run([pip_bin, "install", "-r", str(req)], check=False)
@@ -136,12 +137,6 @@ def install_systemd_unit():
 
     txt = repo_service.read_text()
     txt = txt.replace("LARS.robot_server", "robot_server")  # normalize import path if needed
-    # Ensure dependency on pigpiod.service
-    if "After=network.target" in txt:
-        txt = txt.replace("After=network.target", "After=network.target pigpiod.service")
-    else:
-        # If no After line exists, add it under [Unit]
-        txt = txt.replace("[Unit]", "[Unit]\nAfter=network.target pigpiod.service")
 
     tmp = Path("/tmp/lars-robot-server.service")
     tmp.write_text(txt)
@@ -171,7 +166,7 @@ def main():
     python_choice = find_python_prefer_311()
     venv_python, venv_pip = create_venv(python_choice)
 
-    install_pigpiod()
+    install_gpio_libs()
     install_requirements(venv_pip)
     run_setup_wifi(venv_python)
 
