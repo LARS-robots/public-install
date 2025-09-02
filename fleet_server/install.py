@@ -44,11 +44,7 @@ def main():
     print(f"📁 Создаем директорию {INSTALL_DIR}")
     install_path.mkdir(parents=True, exist_ok=True)
 
-    # Сохраняем текущую директорию и переходим в install_dir
-    original_dir = os.getcwd()
-    os.chdir(install_path)
-
-    # Распаковываем
+    # Распаковываем архив прямо в папку fleet_server
     extract_archive(archive_name, INSTALL_DIR)
     os.remove(archive_name)
     print(f"✅ Проект установлен в папку {INSTALL_DIR}")
