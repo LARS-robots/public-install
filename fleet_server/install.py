@@ -36,6 +36,18 @@ def main():
     archive_name = "fleet_server.tar.gz"
     download_file(REPO_URL, archive_name)
 
+    install_path = Path(INSTALL_DIR)
+    if install_path.exists():
+        print(f"🗑️ Удаляем существующую директорию {INSTALL_DIR}")
+        shutil.rmtree(install_path)
+
+    print(f"📁 Создаем директорию {INSTALL_DIR}")
+    install_path.mkdir(parents=True, exist_ok=True)
+
+    # Сохраняем текущую директорию и переходим в install_dir
+    original_dir = os.getcwd()
+    os.chdir(install_path)
+
     # Распаковываем
     extract_archive(archive_name)
     os.remove(archive_name)
