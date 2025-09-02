@@ -49,7 +49,7 @@ def main():
     os.chdir(install_path)
 
     # Распаковываем
-    extract_archive(archive_name)
+    extract_archive(archive_name, INSTALL_DIR)
     os.remove(archive_name)
     print(f"✅ Проект установлен в папку {INSTALL_DIR}")
 
