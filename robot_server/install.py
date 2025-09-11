@@ -179,6 +179,18 @@ def copy_app_files(app_src):
             dest_file = INSTALL_DIR / top_level_file
             shutil.copy2(src_file, dest_file)
             print(f"  📄 {top_level_file}")
+    
+    # Убеждаемся что есть __init__.py в robot_server для корректного импорта
+    robot_server_init = target_dir / "__init__.py"
+    if not robot_server_init.exists():
+        robot_server_init.write_text("# LARS Robot Server Package\n")
+        print(f"  📄 robot_server/__init__.py (created)")
+        
+    # Проверяем наличие app/__init__.py
+    app_init = target_dir / "app" / "__init__.py"
+    if not app_init.exists() and (target_dir / "app").exists():
+        app_init.write_text("# LARS Robot Server App\n")
+        print(f"  📄 robot_server/app/__init__.py (created)")
 
 def create_venv(python_bin):
     """Создает виртуальное окружение"""
@@ -482,30 +494,49 @@ def install_systemd_unit():
         txt = safe_read_text(repo_service)
         
         # Обновляем пути в service файле для правильной структуры
-        txt = txt.replace("LARS.robot_server", "robot_server")
+        txt = txt.replace("LARS.robot_server", "robot_server.app")
         
-        # Убеждаемся что WorkingDirectory указывает на правильную папку
-        if "WorkingDirectory=" not in txt:
-            # Добавляем WorkingDirectory если его нет
-            lines = txt.splitlines()
-            service_section_found = False
-            new_lines = []
-            for line in lines:
-                new_lines.append(line)
-                if line.strip() == "[Service]":
-                    service_section_found = True
-                elif service_section_found and line.startswith("ExecStart="):
-                    # Добавляем WorkingDirectory после ExecStart
-                    new_lines.append(f"WorkingDirectory={INSTALL_DIR}")
-                    service_section_found = False
-            txt = "\n".join(new_lines)
-        else:
-            # Обновляем существующий WorkingDirectory
-            txt = txt.replace("WorkingDirectory=/home/pi/LARS", f"WorkingDirectory={INSTALL_DIR}")
-        
-        # Обновляем путь к python в ExecStart
-        venv_python = VENV_DIR / "bin" / "python"
-        txt = txt.replace("/home/pi/LARS/venv/bin/python", str(venv_python))
+        # Определяем текущего пользователя
+        current_user = os.getenv('USER') or os.getenv('LOGNAME') or 'pi'
+        home_dir = Path.home()
+         
+         # Убеждаемся что WorkingDirectory указывает на правильную папку
+         if "WorkingDirectory=" not in txt:
+             # Добавляем WorkingDirectory если его нет
+             lines = txt.splitlines()
+             service_section_found = False
+             new_lines = []
+             for line in lines:
+                 new_lines.append(line)
+                 if line.strip() == "[Service]":
+                     service_section_found = True
++                    # Добавляем User и Group
++                    new_lines.append(f"User={current_user}")
++                    new_lines.append(f"Group={current_user}")
+                 elif service_section_found and line.startswith("ExecStart="):
+                     # Добавляем WorkingDirectory после ExecStart
+                     new_lines.append(f"WorkingDirectory={INSTALL_DIR}")
+                     service_section_found = False
+             txt = "\n".join(new_lines)
+         else:
+             # Обновляем существующий WorkingDirectory и пути
+-            txt = txt.replace("WorkingDirectory=/home/pi/LARS", f"WorkingDirectory={INSTALL_DIR}")
++            txt = txt.replace("/home/lars/LARS", str(INSTALL_DIR))
++            txt = txt.replace("/home/pi/LARS", str(INSTALL_DIR))
++            
++            # Добавляем User и Group если их нет
++            if f"User={current_user}" not in txt:
++                txt = txt.replace("[Service]", f"[Service]\nUser={current_user}\nGroup={current_user}")
+         
+         # Обновляем путь к python в ExecStart
+         venv_python = VENV_DIR / "bin" / "python"
+-        txt = txt.replace("/home/pi/LARS/venv/bin/python", str(venv_python))
++        # Заменяем все возможные варианты путей к venv
++        for old_path in ["/home/lars/LARS/venv/bin/python", "/home/pi/LARS/venv/bin/python"]:
++            txt = txt.replace(old_path, str(venv_python))
++            
++        # Исправляем импорт модуля
++        txt = txt.replace("robot_server.main:app", "robot_server.app.main:app")
         
         tmp = Path("/tmp/lars-robot-server.service")
         tmp.write_text(txt, encoding='utf-8')
@@ -590,36 +621,30 @@ def main():
     try:
         tmp_dir, app_src = download_and_extract()
         copy_app_files(app_src)
-
-        python_choice = find_python_prefer_stable()
-        install_system_dependencies() 
-        venv_python, venv_pip = create_venv(python_choice)
-
-        install_requirements(venv_pip)
-        verify_critical_packages(venv_pip)
-        run_setup_wifi(venv_python)
-
-        if not install_systemd_unit():
-            print("⚠️ Service unit not installed.")
-        
-        check_installation()
-
-        print("\n✅ Installation completed!")
-        print("\nUseful commands:")
-        print("  sudo systemctl status lars-robot-server --no-pager")
-        print("  sudo journalctl -u lars-robot-server -f")
-        print("  sudo systemctl restart lars-robot-server")
-
     except Exception as e:
-        print(f"❌ Installation failed: {e}")
+        print(f"❌ Error during download or extraction: {e}")
         traceback.print_exc()
         sys.exit(1)
-    finally:
-        try:
-            if 'tmp_dir' in locals():
-                shutil.rmtree(tmp_dir)
-        except Exception:
-            pass
+
+    # Устанавливаем системные зависимости
+    install_system_dependencies()
+    
+    # Находим и создаем виртуальное окружение
+    python_bin = find_python_prefer_stable()
+    venv_python, venv_pip = create_venv(python_bin)
+    
+    # Устанавливаем требования
+    install_requirements(venv_pip)
+    
+    # Устанавливаем и проверяем systemd unit
+    if install_systemd_unit():
+        run_cmd(["sudo", "systemctl", "start", "lars-robot-server"])
+    
+    # Проверяем установку
+    check_installation()
+    
+    print("\n✅ Установка завершена успешно! Перезагрузите систему для применения всех изменений.")
+    print("Если возникли проблемы, обратитесь к документации или в сообщество поддержки LARS.")
 
 if __name__ == "__main__":
     main()
