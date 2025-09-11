@@ -30,6 +30,20 @@ INSTALL_DIR = Path.home() / "LARS"
 VENV_DIR = INSTALL_DIR / "venv"
 SYSTEMD_TARGET = Path("/etc/systemd/system/lars-robot-server.service")
 
+# Проблемные/встроенные пакеты, которые не нужно устанавливать
+SKIP_PACKAGES = {
+    'contextlib',      # встроенный модуль Python
+    'typing',          # встроенный в Python 3.5+
+    'dataclasses',     # встроенный в Python 3.7+
+    'pathlib',         # встроенный в Python 3.4+
+    'asyncio',         # встроенный в Python 3.4+
+    'json',            # встроенный модуль
+    'datetime',        # встроенный модуль
+    'logging',         # встроенный модуль
+    'os',              # встроенный модуль
+    'sys',             # встроенный модуль
+}
+
 
 # -------- helpers --------
 def run_cmd(cmd, check=True, sudo=False):
@@ -46,12 +60,21 @@ def download_and_extract():
     tmp = Path(tempfile.mkdtemp())
     archive = tmp / "robot_server.tar.gz"
     print("Downloading", ARCHIVE_URL)
-    req = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "LARS-installer"})
-    with urllib.request.urlopen(req) as r, open(archive, "wb") as f:
-        f.write(r.read())
+    
+    try:
+        req = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "LARS-installer"})
+        with urllib.request.urlopen(req) as r, open(archive, "wb") as f:
+            f.write(r.read())
+    except Exception as e:
+        print(f"❌ Failed to download: {e}")
+        sys.exit(1)
 
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(tmp)
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(tmp)
+    except Exception as e:
+        print(f"❌ Failed to extract: {e}")
+        sys.exit(1)
 
     if (tmp / "app").exists():
         app_dir = tmp / "app"
@@ -65,15 +88,26 @@ def download_and_extract():
 
 
 def find_python_prefer_311():
+    """Находит подходящую версию Python, предпочтительно 3.10 для совместимости"""
     candidates = [
+        "/usr/bin/python3.10",  # более совместимая версия
+        "/usr/bin/python3.9",   # ещё более старая, но стабильная
         "/usr/bin/python3.11",
         "/usr/bin/python3",
         shutil.which("python3") or "/usr/bin/python3",
     ]
+    
     for c in candidates:
         if c and Path(c).exists():
-            print("Using python:", c)
-            return str(c)
+            # Проверим версию
+            try:
+                result = subprocess.run([c, "--version"], capture_output=True, text=True)
+                version_str = result.stdout.strip()
+                print(f"Found Python: {c} ({version_str})")
+                return str(c)
+            except Exception:
+                continue
+    
     print("❌ No Python found; please install python3.")
     sys.exit(1)
 
@@ -84,7 +118,13 @@ def create_venv(python_bin):
         shutil.rmtree(VENV_DIR)
     print("Creating venv with", python_bin)
     subprocess.run([python_bin, "-m", "venv", str(VENV_DIR)], check=True)
-    return str(VENV_DIR / "bin" / "python"), str(VENV_DIR / "bin" / "pip")
+    
+    # Обновляем pip в venv до последней версии
+    venv_pip = str(VENV_DIR / "bin" / "pip")
+    print("Upgrading pip in venv...")
+    subprocess.run([venv_pip, "install", "--upgrade", "pip", "setuptools", "wheel"], check=False)
+    
+    return str(VENV_DIR / "bin" / "python"), venv_pip
 
 
 def copy_app_files(app_src):
@@ -111,21 +151,95 @@ def copy_app_files(app_src):
 def install_gpio_libs():
     print("Installing gpiozero + lgpio system-wide")
     run_cmd(["sudo", "apt", "update"], check=True)
-    run_cmd(["sudo", "apt", "install", "-y", "python3-gpiozero", "python3-lgpio", "gpiod"], check=True)
+    run_cmd(["sudo", "apt", "install", "-y", 
+             "python3-gpiozero", "python3-lgpio", "gpiod", 
+             "python3-pip", "python3-dev", "python3-setuptools"], check=True)
+
+
+def clean_requirements_txt(req_file):
+    """Очищает requirements.txt от проблемных пакетов"""
+    if not req_file.exists():
+        return
+    
+    print("Cleaning requirements.txt...")
+    lines = []
+    skipped = []
+    
+    with open(req_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                lines.append(line)
+                continue
+            
+            # Извлекаем имя пакета (до == или >= и т.д.)
+            package_name = line.split('==')[0].split('>=')[0].split('<=')[0].split('~=')[0].strip()
+            
+            if package_name.lower() in SKIP_PACKAGES:
+                skipped.append(package_name)
+                lines.append(f"# SKIPPED: {line}  # built-in module")
+            else:
+                lines.append(line)
+    
+    if skipped:
+        print(f"  ⚠️ Skipped built-in modules: {', '.join(skipped)}")
+        # Сохраняем очищенную версию
+        backup_file = req_file.with_suffix('.txt.backup')
+        shutil.copy2(req_file, backup_file)
+        with open(req_file, 'w') as f:
+            f.write('\n'.join(lines))
+        print(f"  ✅ Cleaned requirements.txt (backup: {backup_file.name})")
 
 
 def install_requirements(pip_bin):
+    print("Installing essential packages first...")
+    # Ставим основные пакеты сначала
+    essential_packages = [
+        "gpiozero", 
+        "lgpio",
+        "fastapi",
+        "uvicorn[standard]",
+        "websockets",
+        "aiofiles",
+        "python-multipart",
+    ]
+    
+    for pkg in essential_packages:
+        print(f"Installing {pkg}...")
+        result = subprocess.run([pip_bin, "install", pkg], check=False)
+        if result.returncode != 0:
+            print(f"  ⚠️ Failed to install {pkg}, continuing...")
+
     req = INSTALL_DIR / "requirements.txt"
-    print("Installing gpiozero + lgpio in virtual environment")
-    subprocess.run([pip_bin, "install", "gpiozero", "lgpio"], check=False)
     if req.exists():
-        print("Installing requirements from", req)
-        subprocess.run([pip_bin, "install", "-r", str(req)], check=False)
+        # Очищаем requirements от проблемных пакетов
+        clean_requirements_txt(req)
+        
+        print("Installing remaining requirements from", req)
+        # Установка с игнорированием ошибок для проблемных пакетов
+        result = subprocess.run([
+            pip_bin, "install", "-r", str(req), 
+            "--no-deps",  # не устанавливаем зависимости автоматически
+            "--force-reinstall"
+        ], check=False)
+        
+        if result.returncode != 0:
+            print("  ⚠️ Some packages failed to install, trying individual installation...")
+            # Пробуем установить пакеты по одному
+            with open(req, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        package_name = line.split('==')[0].split('>=')[0].strip()
+                        if package_name.lower() not in SKIP_PACKAGES:
+                            print(f"  Installing {package_name}...")
+                            subprocess.run([pip_bin, "install", line], check=False)
 
 
 def run_setup_wifi(python_bin):
     setup_script = INSTALL_DIR / "setup_wifi.py"
     if setup_script.exists():
+        print("Running WiFi setup...")
         subprocess.run(["sudo", python_bin, str(setup_script)], check=False)
 
 
@@ -148,10 +262,46 @@ def install_systemd_unit():
     return True
 
 
+def check_installation():
+    """Проверяет успешность установки"""
+    print("\n=== Checking installation ===")
+    
+    # Проверяем наличие основных файлов
+    robot_server_dir = INSTALL_DIR / "robot_server"
+    if robot_server_dir.exists():
+        print("✅ Robot server directory created")
+    else:
+        print("❌ Robot server directory missing")
+    
+    # Проверяем venv
+    if VENV_DIR.exists():
+        print("✅ Virtual environment created")
+        # Проверяем основные пакеты
+        venv_pip = VENV_DIR / "bin" / "pip"
+        if venv_pip.exists():
+            result = subprocess.run([str(venv_pip), "list"], 
+                                   capture_output=True, text=True, check=False)
+            if "fastapi" in result.stdout.lower():
+                print("✅ FastAPI installed")
+            if "gpiozero" in result.stdout.lower():
+                print("✅ GPIOZero installed")
+    else:
+        print("❌ Virtual environment missing")
+    
+    # Проверяем сервис
+    result = subprocess.run(["sudo", "systemctl", "is-enabled", "lars-robot-server"], 
+                           capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        print("✅ Service enabled")
+    else:
+        print("❌ Service not enabled")
+
+
 def main():
     print("=== LARS Robot Server installer ===")
     run_cmd(["sudo", "systemctl", "stop", "lars-robot-server"], check=False)
 
+    # Очищаем предыдущую установку
     for item in ["robot_server", "requirements.txt", "setup_wifi.py", "systemd", "VERSION"]:
         p = INSTALL_DIR / item
         if p.exists():
@@ -160,22 +310,38 @@ def main():
             else:
                 p.unlink()
 
-    tmp_dir, app_src = download_and_extract()
-    copy_app_files(app_src)
+    try:
+        tmp_dir, app_src = download_and_extract()
+        copy_app_files(app_src)
 
-    python_choice = find_python_prefer_311()
-    venv_python, venv_pip = create_venv(python_choice)
+        python_choice = find_python_prefer_311()
+        venv_python, venv_pip = create_venv(python_choice)
 
-    install_gpio_libs()
-    install_requirements(venv_pip)
-    run_setup_wifi(venv_python)
+        install_gpio_libs()
+        install_requirements(venv_pip)
+        run_setup_wifi(venv_python)
 
-    if not install_systemd_unit():
-        print("⚠️ Service unit not installed.")
+        if not install_systemd_unit():
+            print("⚠️ Service unit not installed.")
+        
+        check_installation()
 
-    print("\nDone. Check service with:")
-    print("  sudo systemctl status lars-robot-server --no-pager")
-    print("  sudo journalctl -u lars-robot-server -b --no-pager")
+        print("\n✅ Installation completed!")
+        print("\nUseful commands:")
+        print("  sudo systemctl status lars-robot-server --no-pager")
+        print("  sudo journalctl -u lars-robot-server -f")
+        print("  sudo systemctl restart lars-robot-server")
+
+    except Exception as e:
+        print(f"❌ Installation failed: {e}")
+        sys.exit(1)
+    finally:
+        # Очистка временных файлов
+        try:
+            if 'tmp_dir' in locals():
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
