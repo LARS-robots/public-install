@@ -39,7 +39,6 @@ PROBLEMATIC_PACKAGES = {
     'aiozeroconf': 'zeroconf>=0.131.0 aiozeroconf>=0.1.8',
 }
 
-
 # -------- helpers --------
 def run_cmd(cmd, check=True, sudo=False):
     if sudo and os.geteuid() != 0:
@@ -49,7 +48,6 @@ def run_cmd(cmd, check=True, sudo=False):
             cmd = "sudo " + cmd
     print("▶", cmd if isinstance(cmd, str) else " ".join(cmd))
     return subprocess.run(cmd, shell=not isinstance(cmd, list), check=check)
-
 
 def is_text_file(file_path):
     """Проверяет, является ли файл текстовым"""
@@ -70,7 +68,6 @@ def is_text_file(file_path):
     except (UnicodeDecodeError, IOError):
         return False
 
-
 def safe_read_text(file_path, encoding='utf-8'):
     """Безопасное чтение текстового файла с проверкой"""
     file_path = Path(file_path)
@@ -89,7 +86,6 @@ def safe_read_text(file_path, encoding='utf-8'):
             return file_path.read_text(encoding='latin-1')
         except Exception:
             raise e
-
 
 def download_and_extract():
     tmp = Path(tempfile.mkdtemp())
@@ -152,6 +148,51 @@ def download_and_extract():
     print(f"App directory: {app_dir}")
     return tmp, app_dir
 
+def copy_app_files(app_src):
+    """Копирует файлы приложения в целевую директорию"""
+    print(f"Copying app files from {app_src} to {INSTALL_DIR}")
+    
+    # Создаем целевую директорию
+    INSTALL_DIR.mkdir(exist_ok=True)
+    
+    # Копируем содержимое приложения
+    for item in app_src.iterdir():
+        dest = INSTALL_DIR / item.name
+        if item.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(item, dest)
+            print(f"  📁 {item.name}/")
+        else:
+            shutil.copy2(item, dest)
+            print(f"  📄 {item.name}")
+
+def create_venv(python_bin):
+    """Создает виртуальное окружение"""
+    print(f"Creating virtual environment with {python_bin}")
+    
+    # Удаляем старое окружение если есть
+    if VENV_DIR.exists():
+        shutil.rmtree(VENV_DIR)
+    
+    # Создаем новое
+    result = subprocess.run([python_bin, "-m", "venv", str(VENV_DIR)], check=False)
+    if result.returncode != 0:
+        print("❌ Failed to create virtual environment")
+        sys.exit(1)
+    
+    venv_python = VENV_DIR / "bin" / "python"
+    venv_pip = VENV_DIR / "bin" / "pip"
+    
+    if not venv_python.exists() or not venv_pip.exists():
+        print("❌ Virtual environment creation failed")
+        sys.exit(1)
+    
+    # Обновляем pip в venv
+    subprocess.run([str(venv_pip), "install", "--upgrade", "pip"], check=False)
+    
+    print(f"✅ Virtual environment created at {VENV_DIR}")
+    return str(venv_python), str(venv_pip)
 
 def find_python_prefer_stable():
     """Находит подходящую версию Python, предпочтительно 3.11 для стабильности"""
@@ -163,6 +204,8 @@ def find_python_prefer_stable():
         "/usr/bin/python3",
         shutil.which("python3") or "/usr/bin/python3",
     ]
+    
+    fallback_python = None
     
     for c in candidates:
         if c and Path(c).exists():
@@ -179,20 +222,19 @@ def find_python_prefer_stable():
                 elif major == 3 and minor >= 9:
                     print(f"Found acceptable Python: {c} ({version_str})")
                     # Продолжаем поиск, но запоминаем как запасной вариант
-                    if 'fallback_python' not in locals():
+                    if fallback_python is None:
                         fallback_python = str(c)
             except Exception:
                 continue
     
     # Если не нашли идеальную версию, используем запасную
-    if 'fallback_python' in locals():
+    if fallback_python is not None:
         print(f"⚠️ Using fallback Python: {fallback_python}")
         return fallback_python
     
     print("❌ No suitable Python found; please install python3.11 or python3.10.")
     print("Run: sudo apt update && sudo apt install python3.11 python3.11-venv python3.11-dev")
     sys.exit(1)
-
 
 def install_system_dependencies():
     """Устанавливает системные зависимости"""
@@ -217,7 +259,6 @@ def install_system_dependencies():
         result = run_cmd(["sudo", "apt", "install", "-y", package], check=False)
         if result.returncode != 0:
             print(f"⚠️ Failed to install {package}, continuing...")
-
 
 def clean_requirements_txt(req_file):
     """Очищает requirements.txt от проблемных пакетов"""
@@ -274,7 +315,6 @@ def clean_requirements_txt(req_file):
             print(f"✅ Cleaned requirements.txt (backup: {backup_file.name})")
         except Exception as e:
             print(f"❌ Failed to save cleaned requirements.txt: {e}")
-
 
 def install_requirements(pip_bin):
     print("Installing essential packages first...")
@@ -355,7 +395,6 @@ def install_requirements(pip_bin):
             except Exception as e:
                 print(f"❌ Failed individual installation: {e}")
 
-
 def verify_critical_packages(pip_bin):
     """Проверяет установку критически важных пакетов"""
     print("\n--- Verifying critical packages ---")
@@ -377,13 +416,11 @@ def verify_critical_packages(pip_bin):
         for pkg in missing:
             subprocess.run([pip_bin, "install", "--upgrade", "--force-reinstall", pkg], check=False)
 
-
 def run_setup_wifi(python_bin):
     setup_script = INSTALL_DIR / "setup_wifi.py"
     if setup_script.exists():
         print("Running WiFi setup...")
         subprocess.run(["sudo", python_bin, str(setup_script)], check=False)
-
 
 def install_systemd_unit():
     repo_service = INSTALL_DIR / "systemd" / "lars-robot-server.service"
@@ -410,7 +447,6 @@ def install_systemd_unit():
     except Exception as e:
         print(f"❌ Failed to install systemd unit: {e}")
         return False
-
 
 def check_installation():
     """Проверяет успешность установки"""
@@ -445,7 +481,6 @@ def check_installation():
         print("✅ Service enabled")
     else:
         print("❌ Service not enabled")
-
 
 def main():
     print("=== LARS Robot Server installer ===")
@@ -493,7 +528,6 @@ def main():
                 shutil.rmtree(tmp_dir)
         except Exception:
             pass
-
 
 if __name__ == "__main__":
     main()
