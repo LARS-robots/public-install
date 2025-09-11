@@ -149,23 +149,36 @@ def download_and_extract():
     return tmp, app_dir
 
 def copy_app_files(app_src):
-    """Копирует файлы приложения в целевую директорию"""
-    print(f"Copying app files from {app_src} to {INSTALL_DIR}")
+    """Копирует файлы приложения в целевую директорию LARS/robot_server/"""
+    
+    # Целевая директория должна быть LARS/robot_server, а не просто LARS
+    target_dir = INSTALL_DIR / "robot_server"
+    
+    print(f"Copying app files from {app_src} to {target_dir}")
     
     # Создаем целевую директорию
     INSTALL_DIR.mkdir(exist_ok=True)
+    target_dir.mkdir(exist_ok=True)
     
-    # Копируем содержимое приложения
+    # Копируем содержимое приложения в robot_server/
     for item in app_src.iterdir():
-        dest = INSTALL_DIR / item.name
+        dest = target_dir / item.name
         if item.is_dir():
             if dest.exists():
                 shutil.rmtree(dest)
             shutil.copytree(item, dest)
-            print(f"  📁 {item.name}/")
+            print(f"  📁 robot_server/{item.name}/")
         else:
             shutil.copy2(item, dest)
-            print(f"  📄 {item.name}")
+            print(f"  📄 robot_server/{item.name}")
+    
+    # Также копируем файлы верхнего уровня (если есть) в LARS/
+    for top_level_file in ["requirements.txt", "setup_wifi.py", "VERSION"]:
+        src_file = app_src / top_level_file
+        if src_file.exists():
+            dest_file = INSTALL_DIR / top_level_file
+            shutil.copy2(src_file, dest_file)
+            print(f"  📄 {top_level_file}")
 
 def create_venv(python_bin):
     """Создает виртуальное окружение"""
@@ -262,21 +275,34 @@ def install_system_dependencies():
 
 def clean_requirements_txt(req_file):
     """Очищает requirements.txt от проблемных пакетов"""
-    if not req_file.exists():
-        print(f"⚠️ Requirements file not found: {req_file}")
+    
+    # Ищем requirements.txt в правильных локациях
+    possible_req_files = [
+        INSTALL_DIR / "requirements.txt",
+        INSTALL_DIR / "robot_server" / "requirements.txt",
+    ]
+    
+    actual_req_file = None
+    for req_path in possible_req_files:
+        if req_path.exists():
+            actual_req_file = req_path
+            break
+    
+    if actual_req_file is None:
+        print(f"⚠️ Requirements file not found in expected locations")
         return
     
-    if not is_text_file(req_file):
-        print(f"⚠️ Requirements file is not a text file: {req_file}")
+    if not is_text_file(actual_req_file):
+        print(f"⚠️ Requirements file is not a text file: {actual_req_file}")
         return
     
-    print("Cleaning requirements.txt...")
+    print(f"Cleaning requirements.txt at {actual_req_file}")
     lines = []
     skipped = []
     replaced = []
     
     try:
-        content = safe_read_text(req_file)
+        content = safe_read_text(actual_req_file)
         for line in content.splitlines():
             original_line = line.strip()
             if not original_line or original_line.startswith('#'):
@@ -308,10 +334,10 @@ def clean_requirements_txt(req_file):
         
     if skipped or replaced:
         # Сохраняем очищенную версию
-        backup_file = req_file.with_suffix('.txt.backup')
+        backup_file = actual_req_file.with_suffix('.txt.backup')
         try:
-            shutil.copy2(req_file, backup_file)
-            req_file.write_text('\n'.join(lines), encoding='utf-8')
+            shutil.copy2(actual_req_file, backup_file)
+            actual_req_file.write_text('\n'.join(lines), encoding='utf-8')
             print(f"✅ Cleaned requirements.txt (backup: {backup_file.name})")
         except Exception as e:
             print(f"❌ Failed to save cleaned requirements.txt: {e}")
@@ -370,11 +396,21 @@ def install_requirements(pip_bin):
                 print(f"⚠️ Failed to install {pkg}, continuing...")
 
     # Теперь устанавливаем остальные requirements
-    req = INSTALL_DIR / "requirements.txt"
-    if req.exists():
+    req_files = [
+        INSTALL_DIR / "requirements.txt",
+        INSTALL_DIR / "robot_server" / "requirements.txt",
+    ]
+    
+    req = None
+    for req_file in req_files:
+        if req_file.exists():
+            req = req_file
+            break
+    
+    if req and req.exists():
         clean_requirements_txt(req)
         
-        print("\n--- Installing remaining requirements ---")
+        print(f"\n--- Installing requirements from {req} ---")
         result = subprocess.run([
             pip_bin, "install", "-r", str(req), 
             "--upgrade",
@@ -394,6 +430,8 @@ def install_requirements(pip_bin):
                             subprocess.run([pip_bin, "install", "--upgrade", line], check=False)
             except Exception as e:
                 print(f"❌ Failed individual installation: {e}")
+    else:
+        print("⚠️ No requirements.txt found, skipping package installation")
 
 def verify_critical_packages(pip_bin):
     """Проверяет установку критически важных пакетов"""
@@ -416,16 +454,24 @@ def verify_critical_packages(pip_bin):
         for pkg in missing:
             subprocess.run([pip_bin, "install", "--upgrade", "--force-reinstall", pkg], check=False)
 
-def run_setup_wifi(python_bin):
-    setup_script = INSTALL_DIR / "setup_wifi.py"
-    if setup_script.exists():
-        print("Running WiFi setup...")
-        subprocess.run(["sudo", python_bin, str(setup_script)], check=False)
-
 def install_systemd_unit():
-    repo_service = INSTALL_DIR / "systemd" / "lars-robot-server.service"
-    if not repo_service.exists():
-        print("❌ No service file found at", repo_service)
+    """Устанавливает systemd unit с правильными путями"""
+    
+    # Ищем service файл в разных возможных локациях
+    possible_service_files = [
+        INSTALL_DIR / "robot_server" / "systemd" / "lars-robot-server.service",
+        INSTALL_DIR / "systemd" / "lars-robot-server.service", 
+        INSTALL_DIR / "lars-robot-server.service",
+    ]
+    
+    repo_service = None
+    for service_file in possible_service_files:
+        if service_file.exists():
+            repo_service = service_file
+            break
+    
+    if repo_service is None:
+        print("❌ No service file found in expected locations")
         return False
 
     if not is_text_file(repo_service):
@@ -434,8 +480,33 @@ def install_systemd_unit():
 
     try:
         txt = safe_read_text(repo_service)
-        txt = txt.replace("LARS.robot_server", "robot_server")  # normalize import path if needed
-
+        
+        # Обновляем пути в service файле для правильной структуры
+        txt = txt.replace("LARS.robot_server", "robot_server")
+        
+        # Убеждаемся что WorkingDirectory указывает на правильную папку
+        if "WorkingDirectory=" not in txt:
+            # Добавляем WorkingDirectory если его нет
+            lines = txt.splitlines()
+            service_section_found = False
+            new_lines = []
+            for line in lines:
+                new_lines.append(line)
+                if line.strip() == "[Service]":
+                    service_section_found = True
+                elif service_section_found and line.startswith("ExecStart="):
+                    # Добавляем WorkingDirectory после ExecStart
+                    new_lines.append(f"WorkingDirectory={INSTALL_DIR}")
+                    service_section_found = False
+            txt = "\n".join(new_lines)
+        else:
+            # Обновляем существующий WorkingDirectory
+            txt = txt.replace("WorkingDirectory=/home/pi/LARS", f"WorkingDirectory={INSTALL_DIR}")
+        
+        # Обновляем путь к python в ExecStart
+        venv_python = VENV_DIR / "bin" / "python"
+        txt = txt.replace("/home/pi/LARS/venv/bin/python", str(venv_python))
+        
         tmp = Path("/tmp/lars-robot-server.service")
         tmp.write_text(txt, encoding='utf-8')
 
@@ -443,10 +514,31 @@ def install_systemd_unit():
         run_cmd(["sudo", "systemctl", "daemon-reload"])
         run_cmd(["sudo", "systemctl", "enable", "lars-robot-server.service"])
         run_cmd(["sudo", "systemctl", "restart", "lars-robot-server.service"], check=False)
+        print(f"✅ Service installed and enabled")
         return True
     except Exception as e:
         print(f"❌ Failed to install systemd unit: {e}")
         return False
+
+def run_setup_wifi(python_bin):
+    """Запускает setup_wifi.py из правильной локации"""
+    
+    setup_files = [
+        INSTALL_DIR / "setup_wifi.py",
+        INSTALL_DIR / "robot_server" / "setup_wifi.py",
+    ]
+    
+    setup_script = None
+    for setup_file in setup_files:
+        if setup_file.exists():
+            setup_script = setup_file
+            break
+    
+    if setup_script and setup_script.exists():
+        print(f"Running WiFi setup from {setup_script}...")
+        subprocess.run(["sudo", python_bin, str(setup_script)], check=False)
+    else:
+        print("⚠️ No setup_wifi.py found, skipping WiFi setup")
 
 def check_installation():
     """Проверяет успешность установки"""
