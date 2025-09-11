@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 """
 LARS Robot Server Installer (версии без pigpio/pigpiod)
-
-Этот установщик:
- - скачивает архив robot_server,
- - копирует файлы приложения в ~/LARS/robot_server,
- - создает Python venv (предпочтительно python3.11),
- - устанавливает requirements + gpiozero + lgpio в venv,
- - ставит системные пакеты gpiozero + lgpio,
- - запускает setup_wifi.py (best-effort),
- - копирует systemd/lars-robot-server.service в /etc/systemd/system,
-   заменяя "LARS.robot_server" на "robot_server" при необходимости,
- - включает и запускает сервис.
 """
 
 from pathlib import Path
@@ -43,6 +32,11 @@ SKIP_PACKAGES = {
     'logging',         # встроенный модуль
     'os',              # встроенный модуль
     'sys',             # встроенный модуль
+}
+
+# Проблемные пакеты, которые требуют особого внимания
+PROBLEMATIC_PACKAGES = {
+    'aiozeroconf': 'zeroconf>=0.131.0 aiozeroconf>=0.1.8',
 }
 
 
@@ -159,174 +153,196 @@ def download_and_extract():
     return tmp, app_dir
 
 
-def find_python_prefer_311():
-    """Находит подходящую версию Python, предпочтительно 3.10 для совместимости"""
+def find_python_prefer_stable():
+    """Находит подходящую версию Python, предпочтительно 3.11 для стабильности"""
     candidates = [
-        "/usr/bin/python3.10",  # более совместимая версия
-        "/usr/bin/python3.9",   # ещё более старая, но стабильная
-        "/usr/bin/python3.11",
+        "/usr/bin/python3.11",  # предпочтительная стабильная версия
+        "/usr/bin/python3.10",  # альтернативная стабильная
+        "/usr/bin/python3.12",  # новая, но может иметь проблемы совместимости
+        "/usr/bin/python3.9",   # старая, но надежная
         "/usr/bin/python3",
         shutil.which("python3") or "/usr/bin/python3",
     ]
     
     for c in candidates:
         if c and Path(c).exists():
-            # Проверим версию
             try:
                 result = subprocess.run([c, "--version"], capture_output=True, text=True)
                 version_str = result.stdout.strip()
-                print(f"Found Python: {c} ({version_str})")
-                return str(c)
+                version_parts = version_str.split()[1].split('.')
+                major, minor = int(version_parts[0]), int(version_parts[1])
+                
+                # Предпочитаем Python 3.10-3.11 для максимальной совместимости
+                if major == 3 and 10 <= minor <= 11:
+                    print(f"✅ Found preferred Python: {c} ({version_str})")
+                    return str(c)
+                elif major == 3 and minor >= 9:
+                    print(f"Found acceptable Python: {c} ({version_str})")
+                    # Продолжаем поиск, но запоминаем как запасной вариант
+                    if 'fallback_python' not in locals():
+                        fallback_python = str(c)
             except Exception:
                 continue
     
-    print("❌ No Python found; please install python3.")
+    # Если не нашли идеальную версию, используем запасную
+    if 'fallback_python' in locals():
+        print(f"⚠️ Using fallback Python: {fallback_python}")
+        return fallback_python
+    
+    print("❌ No suitable Python found; please install python3.11 or python3.10.")
+    print("Run: sudo apt update && sudo apt install python3.11 python3.11-venv python3.11-dev")
     sys.exit(1)
 
 
-def create_venv(python_bin):
-    if VENV_DIR.exists():
-        print("Removing existing venv:", VENV_DIR)
-        shutil.rmtree(VENV_DIR)
-    print("Creating venv with", python_bin)
-    subprocess.run([python_bin, "-m", "venv", str(VENV_DIR)], check=True)
-    
-    # Обновляем pip в venv до последней версии
-    venv_pip = str(VENV_DIR / "bin" / "pip")
-    print("Upgrading pip in venv...")
-    subprocess.run([venv_pip, "install", "--upgrade", "pip", "setuptools", "wheel"], check=False)
-    
-    return str(VENV_DIR / "bin" / "python"), venv_pip
-
-
-def copy_app_files(app_src):
-    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    dest = INSTALL_DIR / "robot_server"
-    if dest.exists():
-        shutil.rmtree(dest)
-    print("Copying app to", dest)
-    shutil.copytree(app_src, dest)
-
-    # Копирование дополнительных файлов
-    for name in ["requirements.txt", "setup_wifi.py", "VERSION"]:
-        src_parent = app_src.parent / name
-        src_self = app_src / name
-        
-        if src_parent.exists():
-            src = src_parent
-        elif src_self.exists():
-            src = src_self
-        else:
-            continue
-            
-        try:
-            shutil.copy2(src, INSTALL_DIR / name)
-            print(f"  Copied: {name}")
-        except Exception as e:
-            print(f"  ⚠️ Failed to copy {name}: {e}")
-
-    # Копирование systemd файлов
-    src_systemd = app_src.parent / "systemd"
-    if src_systemd.exists():
-        dest_systemd = INSTALL_DIR / "systemd"
-        if dest_systemd.exists():
-            shutil.rmtree(dest_systemd)
-        try:
-            shutil.copytree(src_systemd, dest_systemd)
-            print("  Copied: systemd/")
-        except Exception as e:
-            print(f"  ⚠️ Failed to copy systemd/: {e}")
-
-
-def install_gpio_libs():
-    print("Installing gpiozero + lgpio system-wide")
+def install_system_dependencies():
+    """Устанавливает системные зависимости"""
+    print("Installing system dependencies...")
     run_cmd(["sudo", "apt", "update"], check=True)
-    run_cmd(["sudo", "apt", "install", "-y", 
-             "python3-gpiozero", "python3-lgpio", "gpiod", 
-             "python3-pip", "python3-dev", "python3-setuptools"], check=True)
+    
+    # Системные пакеты для Python и мультимедиа
+    system_packages = [
+        "python3-pip", "python3-dev", "python3-setuptools", "python3-venv",
+        "python3-gpiozero", "python3-lgpio", "gpiod",
+        "build-essential", "pkg-config",
+        "libavformat-dev", "libavcodec-dev", "libavdevice-dev", "libavutil-dev",
+        "libavfilter-dev", "libswscale-dev", "libswresample-dev",
+        "libopus-dev", "libvpx-dev", "libsrtp2-dev",
+        "cmake", "libssl-dev", "libffi-dev",
+        # Зависимости для zeroconf
+        "libavahi-compat-libdnssd-dev", "avahi-utils",
+    ]
+    
+    for package in system_packages:
+        print(f"Installing {package}...")
+        result = run_cmd(["sudo", "apt", "install", "-y", package], check=False)
+        if result.returncode != 0:
+            print(f"⚠️ Failed to install {package}, continuing...")
 
 
 def clean_requirements_txt(req_file):
     """Очищает requirements.txt от проблемных пакетов"""
     if not req_file.exists():
-        print(f"  ⚠️ Requirements file not found: {req_file}")
+        print(f"⚠️ Requirements file not found: {req_file}")
         return
     
     if not is_text_file(req_file):
-        print(f"  ⚠️ Requirements file is not a text file: {req_file}")
+        print(f"⚠️ Requirements file is not a text file: {req_file}")
         return
     
     print("Cleaning requirements.txt...")
     lines = []
     skipped = []
+    replaced = []
     
     try:
         content = safe_read_text(req_file)
         for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                lines.append(line)
+            original_line = line.strip()
+            if not original_line or original_line.startswith('#'):
+                lines.append(original_line)
                 continue
             
-            # Извлекаем имя пакета (до == или >= и т.д.)
-            package_name = line.split('==')[0].split('>=')[0].split('<=')[0].split('~=')[0].strip()
+            # Извлекаем имя пакета
+            package_name = original_line.split('==')[0].split('>=')[0].split('<=')[0].split('~=')[0].strip()
             
             if package_name.lower() in SKIP_PACKAGES:
                 skipped.append(package_name)
-                lines.append(f"# SKIPPED: {line}  # built-in module")
+                lines.append(f"# SKIPPED: {original_line}  # built-in module")
+            elif package_name.lower() in PROBLEMATIC_PACKAGES:
+                replacement = PROBLEMATIC_PACKAGES[package_name.lower()]
+                replaced.append(f"{package_name} -> {replacement}")
+                lines.append(f"# REPLACED: {original_line}")
+                for pkg in replacement.split():
+                    lines.append(pkg)
             else:
-                lines.append(line)
+                lines.append(original_line)
     except Exception as e:
-        print(f"  ❌ Failed to read requirements.txt: {e}")
+        print(f"❌ Failed to read requirements.txt: {e}")
         return
     
     if skipped:
-        print(f"  ⚠️ Skipped built-in modules: {', '.join(skipped)}")
+        print(f"⚠️ Skipped built-in modules: {', '.join(skipped)}")
+    if replaced:
+        print(f"🔄 Replaced problematic packages: {', '.join(replaced)}")
+        
+    if skipped or replaced:
         # Сохраняем очищенную версию
         backup_file = req_file.with_suffix('.txt.backup')
         try:
             shutil.copy2(req_file, backup_file)
             req_file.write_text('\n'.join(lines), encoding='utf-8')
-            print(f"  ✅ Cleaned requirements.txt (backup: {backup_file.name})")
+            print(f"✅ Cleaned requirements.txt (backup: {backup_file.name})")
         except Exception as e:
-            print(f"  ❌ Failed to save cleaned requirements.txt: {e}")
+            print(f"❌ Failed to save cleaned requirements.txt: {e}")
 
 
 def install_requirements(pip_bin):
     print("Installing essential packages first...")
-    # Ставим основные пакеты сначала
-    essential_packages = [
-        "gpiozero", 
-        "lgpio",
-        "fastapi",
-        "uvicorn[standard]",
-        "websockets",
-        "aiofiles",
-        "python-multipart",
+    
+    # Устанавливаем критически важные пакеты поэтапно
+    stage1_packages = [
+        "pip>=23.0",
+        "setuptools>=65.0", 
+        "wheel>=0.38.0",
     ]
     
-    for pkg in essential_packages:
-        print(f"Installing {pkg}...")
-        result = subprocess.run([pip_bin, "install", pkg], check=False)
-        if result.returncode != 0:
-            print(f"  ⚠️ Failed to install {pkg}, continuing...")
+    stage2_packages = [
+        "cython>=0.29.0",  # может понадобиться для компиляции
+        "numpy>=1.21.0",   # многие пакеты зависят от numpy
+    ]
+    
+    stage3_packages = [
+        "fastapi>=0.100.0",
+        "uvicorn[standard]>=0.20.0",
+        "websockets>=11.0",  
+        "aiofiles>=22.0",
+        "python-multipart>=0.0.6",
+    ]
+    
+    stage4_packages = [
+        "gpiozero>=1.6.0", 
+        "lgpio>=0.2.0",
+    ]
+    
+    stage5_packages = [
+        # Зависимости для aiozeroconf
+        "zeroconf>=0.131.0",
+        "aiozeroconf>=0.1.8",
+        "netifaces>=0.11.0",
+        "ifaddr>=0.1.7",
+    ]
 
+    for stage_name, packages in [
+        ("Core tools", stage1_packages),
+        ("Build dependencies", stage2_packages), 
+        ("Web framework", stage3_packages),
+        ("GPIO libraries", stage4_packages),
+        ("Network discovery", stage5_packages),
+    ]:
+        print(f"\n--- Installing {stage_name} ---")
+        for pkg in packages:
+            print(f"Installing {pkg}...")
+            result = subprocess.run([
+                pip_bin, "install", "--upgrade", pkg,
+                "--no-cache-dir",  # избегаем проблем с кешем
+            ], check=False)
+            if result.returncode != 0:
+                print(f"⚠️ Failed to install {pkg}, continuing...")
+
+    # Теперь устанавливаем остальные requirements
     req = INSTALL_DIR / "requirements.txt"
     if req.exists():
-        # Очищаем requirements от проблемных пакетов
         clean_requirements_txt(req)
         
-        print("Installing remaining requirements from", req)
-        # Установка с игнорированием ошибок для проблемных пакетов
+        print("\n--- Installing remaining requirements ---")
         result = subprocess.run([
             pip_bin, "install", "-r", str(req), 
-            "--no-deps",  # не устанавливаем зависимости автоматически
-            "--force-reinstall"
+            "--upgrade",
+            "--no-cache-dir",
         ], check=False)
         
         if result.returncode != 0:
-            print("  ⚠️ Some packages failed to install, trying individual installation...")
-            # Пробуем установить пакеты по одному
+            print("⚠️ Some packages failed, trying individual installation...")
             try:
                 content = safe_read_text(req)
                 for line in content.splitlines():
@@ -334,10 +350,32 @@ def install_requirements(pip_bin):
                     if line and not line.startswith('#'):
                         package_name = line.split('==')[0].split('>=')[0].strip()
                         if package_name.lower() not in SKIP_PACKAGES:
-                            print(f"  Installing {package_name}...")
-                            subprocess.run([pip_bin, "install", line], check=False)
+                            print(f"Installing {package_name}...")
+                            subprocess.run([pip_bin, "install", "--upgrade", line], check=False)
             except Exception as e:
-                print(f"  ❌ Failed to read requirements for individual installation: {e}")
+                print(f"❌ Failed individual installation: {e}")
+
+
+def verify_critical_packages(pip_bin):
+    """Проверяет установку критически важных пакетов"""
+    print("\n--- Verifying critical packages ---")
+    critical = ["fastapi", "uvicorn", "aiozeroconf", "gpiozero"]
+    
+    result = subprocess.run([pip_bin, "list"], capture_output=True, text=True, check=False)
+    installed = result.stdout.lower() if result.returncode == 0 else ""
+    
+    missing = []
+    for pkg in critical:
+        if pkg.lower() in installed:
+            print(f"✅ {pkg} installed")
+        else:
+            print(f"❌ {pkg} missing")
+            missing.append(pkg)
+    
+    if missing:
+        print(f"⚠️ Attempting to install missing packages: {missing}")
+        for pkg in missing:
+            subprocess.run([pip_bin, "install", "--upgrade", "--force-reinstall", pkg], check=False)
 
 
 def run_setup_wifi(python_bin):
@@ -426,11 +464,12 @@ def main():
         tmp_dir, app_src = download_and_extract()
         copy_app_files(app_src)
 
-        python_choice = find_python_prefer_311()
+        python_choice = find_python_prefer_stable()
+        install_system_dependencies() 
         venv_python, venv_pip = create_venv(python_choice)
 
-        install_gpio_libs()
         install_requirements(venv_pip)
+        verify_critical_packages(venv_pip)
         run_setup_wifi(venv_python)
 
         if not install_systemd_unit():
@@ -449,7 +488,6 @@ def main():
         traceback.print_exc()
         sys.exit(1)
     finally:
-        # Очистка временных файлов
         try:
             if 'tmp_dir' in locals():
                 shutil.rmtree(tmp_dir)
