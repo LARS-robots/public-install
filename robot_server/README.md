@@ -36,4 +36,4 @@ python3 -m uvicorn robot_server.app.main:app --host 0.0.0.0 --port 8081
 - **Веб-интерфейс**: http://10.42.0.13:8081/docs
 
 ---
-Версия: dev-20250911-070547
+Версия: dev-20250911-071114

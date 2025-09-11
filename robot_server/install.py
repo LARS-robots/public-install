@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import os
+import traceback
 
 # -------- CONFIG --------
 GITHUB_REPO = "LARS-robots/public-install"
@@ -56,6 +57,46 @@ def run_cmd(cmd, check=True, sudo=False):
     return subprocess.run(cmd, shell=not isinstance(cmd, list), check=check)
 
 
+def is_text_file(file_path):
+    """Проверяет, является ли файл текстовым"""
+    try:
+        with open(file_path, 'rb') as f:
+            # Читаем первые 1024 байта
+            chunk = f.read(1024)
+            if not chunk:
+                return True  # пустой файл считаем текстовым
+            
+            # Проверяем на наличие нулевых байтов (признак бинарного файла)
+            if b'\x00' in chunk:
+                return False
+            
+            # Пытаемся декодировать как UTF-8
+            chunk.decode('utf-8')
+            return True
+    except (UnicodeDecodeError, IOError):
+        return False
+
+
+def safe_read_text(file_path, encoding='utf-8'):
+    """Безопасное чтение текстового файла с проверкой"""
+    file_path = Path(file_path)
+    
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    if not is_text_file(file_path):
+        raise ValueError(f"File is not a text file: {file_path}")
+    
+    try:
+        return file_path.read_text(encoding=encoding)
+    except UnicodeDecodeError as e:
+        print(f"⚠️ UTF-8 decode error in {file_path}, trying latin-1...")
+        try:
+            return file_path.read_text(encoding='latin-1')
+        except Exception:
+            raise e
+
+
 def download_and_extract():
     tmp = Path(tempfile.mkdtemp())
     archive = tmp / "robot_server.tar.gz"
@@ -63,27 +104,58 @@ def download_and_extract():
     
     try:
         req = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "LARS-installer"})
-        with urllib.request.urlopen(req) as r, open(archive, "wb") as f:
-            f.write(r.read())
+        with urllib.request.urlopen(req) as r:
+            # Проверяем Content-Type
+            content_type = r.headers.get('Content-Type', '')
+            print(f"Content-Type: {content_type}")
+            
+            with open(archive, "wb") as f:
+                f.write(r.read())
+                
+        print(f"Downloaded {archive.stat().st_size} bytes")
     except Exception as e:
         print(f"❌ Failed to download: {e}")
         sys.exit(1)
 
     try:
+        # Проверяем, что файл действительно является архивом
+        if not tarfile.is_tarfile(archive):
+            print(f"❌ Downloaded file is not a valid tar archive")
+            print(f"File size: {archive.stat().st_size} bytes")
+            # Показываем первые байты для диагностики
+            with open(archive, 'rb') as f:
+                first_bytes = f.read(16)
+                print(f"First bytes: {first_bytes.hex()}")
+            sys.exit(1)
+            
         with tarfile.open(archive, "r:gz") as tar:
             tar.extractall(tmp)
     except Exception as e:
-        print(f"❌ Failed to extract: {e}")
+        print(f"❌ Failed to extract archive: {e}")
+        print(f"Archive size: {archive.stat().st_size} bytes")
         sys.exit(1)
 
-    if (tmp / "app").exists():
-        app_dir = tmp / "app"
-    elif (tmp / "robot_server").exists():
-        app_dir = tmp / "robot_server"
-    else:
-        app_dir = tmp
+    # Поиск директории с приложением
+    possible_dirs = [tmp / "app", tmp / "robot_server", tmp]
+    app_dir = None
+    
+    for dir_path in possible_dirs:
+        if dir_path.exists() and dir_path.is_dir():
+            # Проверяем наличие признаков приложения
+            if any((dir_path / f).exists() for f in ["main.py", "app", "__init__.py"]):
+                app_dir = dir_path
+                break
+    
+    if app_dir is None:
+        # Используем первую найденную директорию
+        subdirs = [d for d in tmp.iterdir() if d.is_dir()]
+        if subdirs:
+            app_dir = subdirs[0]
+        else:
+            app_dir = tmp
 
-    print("Archive extracted to:", tmp)
+    print(f"Archive extracted to: {tmp}")
+    print(f"App directory: {app_dir}")
     return tmp, app_dir
 
 
@@ -135,17 +207,35 @@ def copy_app_files(app_src):
     print("Copying app to", dest)
     shutil.copytree(app_src, dest)
 
+    # Копирование дополнительных файлов
     for name in ["requirements.txt", "setup_wifi.py", "VERSION"]:
-        src = app_src.parent / name if (app_src.parent / name).exists() else app_src / name
-        if src.exists():
+        src_parent = app_src.parent / name
+        src_self = app_src / name
+        
+        if src_parent.exists():
+            src = src_parent
+        elif src_self.exists():
+            src = src_self
+        else:
+            continue
+            
+        try:
             shutil.copy2(src, INSTALL_DIR / name)
+            print(f"  Copied: {name}")
+        except Exception as e:
+            print(f"  ⚠️ Failed to copy {name}: {e}")
 
+    # Копирование systemd файлов
     src_systemd = app_src.parent / "systemd"
     if src_systemd.exists():
         dest_systemd = INSTALL_DIR / "systemd"
         if dest_systemd.exists():
             shutil.rmtree(dest_systemd)
-        shutil.copytree(src_systemd, dest_systemd)
+        try:
+            shutil.copytree(src_systemd, dest_systemd)
+            print("  Copied: systemd/")
+        except Exception as e:
+            print(f"  ⚠️ Failed to copy systemd/: {e}")
 
 
 def install_gpio_libs():
@@ -159,14 +249,20 @@ def install_gpio_libs():
 def clean_requirements_txt(req_file):
     """Очищает requirements.txt от проблемных пакетов"""
     if not req_file.exists():
+        print(f"  ⚠️ Requirements file not found: {req_file}")
+        return
+    
+    if not is_text_file(req_file):
+        print(f"  ⚠️ Requirements file is not a text file: {req_file}")
         return
     
     print("Cleaning requirements.txt...")
     lines = []
     skipped = []
     
-    with open(req_file, 'r') as f:
-        for line in f:
+    try:
+        content = safe_read_text(req_file)
+        for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith('#'):
                 lines.append(line)
@@ -180,15 +276,20 @@ def clean_requirements_txt(req_file):
                 lines.append(f"# SKIPPED: {line}  # built-in module")
             else:
                 lines.append(line)
+    except Exception as e:
+        print(f"  ❌ Failed to read requirements.txt: {e}")
+        return
     
     if skipped:
         print(f"  ⚠️ Skipped built-in modules: {', '.join(skipped)}")
         # Сохраняем очищенную версию
         backup_file = req_file.with_suffix('.txt.backup')
-        shutil.copy2(req_file, backup_file)
-        with open(req_file, 'w') as f:
-            f.write('\n'.join(lines))
-        print(f"  ✅ Cleaned requirements.txt (backup: {backup_file.name})")
+        try:
+            shutil.copy2(req_file, backup_file)
+            req_file.write_text('\n'.join(lines), encoding='utf-8')
+            print(f"  ✅ Cleaned requirements.txt (backup: {backup_file.name})")
+        except Exception as e:
+            print(f"  ❌ Failed to save cleaned requirements.txt: {e}")
 
 
 def install_requirements(pip_bin):
@@ -226,14 +327,17 @@ def install_requirements(pip_bin):
         if result.returncode != 0:
             print("  ⚠️ Some packages failed to install, trying individual installation...")
             # Пробуем установить пакеты по одному
-            with open(req, 'r') as f:
-                for line in f:
+            try:
+                content = safe_read_text(req)
+                for line in content.splitlines():
                     line = line.strip()
                     if line and not line.startswith('#'):
                         package_name = line.split('==')[0].split('>=')[0].strip()
                         if package_name.lower() not in SKIP_PACKAGES:
                             print(f"  Installing {package_name}...")
                             subprocess.run([pip_bin, "install", line], check=False)
+            except Exception as e:
+                print(f"  ❌ Failed to read requirements for individual installation: {e}")
 
 
 def run_setup_wifi(python_bin):
@@ -249,17 +353,25 @@ def install_systemd_unit():
         print("❌ No service file found at", repo_service)
         return False
 
-    txt = repo_service.read_text()
-    txt = txt.replace("LARS.robot_server", "robot_server")  # normalize import path if needed
+    if not is_text_file(repo_service):
+        print(f"❌ Service file is not a text file: {repo_service}")
+        return False
 
-    tmp = Path("/tmp/lars-robot-server.service")
-    tmp.write_text(txt)
+    try:
+        txt = safe_read_text(repo_service)
+        txt = txt.replace("LARS.robot_server", "robot_server")  # normalize import path if needed
 
-    run_cmd(["sudo", "cp", str(tmp), str(SYSTEMD_TARGET)], check=True)
-    run_cmd(["sudo", "systemctl", "daemon-reload"])
-    run_cmd(["sudo", "systemctl", "enable", "lars-robot-server.service"])
-    run_cmd(["sudo", "systemctl", "restart", "lars-robot-server.service"], check=False)
-    return True
+        tmp = Path("/tmp/lars-robot-server.service")
+        tmp.write_text(txt, encoding='utf-8')
+
+        run_cmd(["sudo", "cp", str(tmp), str(SYSTEMD_TARGET)], check=True)
+        run_cmd(["sudo", "systemctl", "daemon-reload"])
+        run_cmd(["sudo", "systemctl", "enable", "lars-robot-server.service"])
+        run_cmd(["sudo", "systemctl", "restart", "lars-robot-server.service"], check=False)
+        return True
+    except Exception as e:
+        print(f"❌ Failed to install systemd unit: {e}")
+        return False
 
 
 def check_installation():
@@ -334,6 +446,7 @@ def main():
 
     except Exception as e:
         print(f"❌ Installation failed: {e}")
+        traceback.print_exc()
         sys.exit(1)
     finally:
         # Очистка временных файлов
