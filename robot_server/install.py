@@ -92,10 +92,9 @@ def setup_systemd_service(service_path, target_path):
 
 
 def setup_wifi_script():
-    wifi_script = INSTALL_DIR / "setup_wifi.sh"
+    wifi_script = INSTALL_DIR / "setup_wifi.py"
     if wifi_script.exists():
-        run_cmd(["chmod", "+x", str(wifi_script)])
-        run_cmd([str(wifi_script)])
+        run_cmd(["python3", str(wifi_script)])
     else:
         print(f"Warning: WiFi setup script not found at {wifi_script}")
 
@@ -112,7 +111,7 @@ def main():
     create_venv(VENV_DIR)
     
     print("4. Setting up systemd service")
-    service_file = INSTALL_DIR / "robot_server" / "lars-robot-server.service"
+    service_file = INSTALL_DIR / "systemd" / "lars-robot-server.service"
     if not service_file.exists():
         service_file = INSTALL_DIR / "lars-robot-server.service"
     setup_systemd_service(service_file, SYSTEMD_TARGET)
