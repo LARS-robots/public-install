@@ -94,26 +94,7 @@ def setup_systemd_service(service_path, target_path):
 def setup_wifi_script():
     wifi_script = INSTALL_DIR / "setup_wifi.py"
     if wifi_script.exists():
-        # Ask user for configuration before calling the script
-        print("\n🔧 WiFi Configuration Setup")
-        print("=" * 50)
-        print("1. Основной робот (LARSrobot-AP)")
-        print("2. Тестовый робот (LARSrobotTEST-AP)")
-        print("3. Пользовательская настройка")
-        print("4. Пропустить настройку WiFi")
-        
-        while True:
-            choice = input("\nВыберите тип конфигурации (1-4): ").strip()
-            if choice in ['1', '2', '3', '4']:
-                break
-            print("❌ Неверный выбор! Выберите 1, 2, 3 или 4")
-        
-        if choice == '4':
-            print("⚠️ Настройка WiFi пропущена")
-            return
-            
-        # Pass choice as argument to the script
-        run_cmd(["python3", str(wifi_script), choice])
+        run_cmd(["python3", str(wifi_script)])
     else:
         print(f"Warning: WiFi setup script not found at {wifi_script}")
 
@@ -135,7 +116,9 @@ def main():
     setup_systemd_service(service_file, SYSTEMD_TARGET)
 
     print("5. Setting up access points for robot server")
-    setup_wifi_script()
+    answer = input("Do you want to set up WiFi access points now? (y/n): ").strip().lower()
+    if answer == 'y':
+        setup_wifi_script()
 
     print("Installation complete.")
 
