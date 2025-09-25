@@ -111,9 +111,8 @@ def main():
     create_venv(VENV_DIR)
     
     print("4. Setting up systemd service")
+
     service_file = INSTALL_DIR / "systemd" / "lars-robot-server.service"
-    if not service_file.exists():
-        service_file = INSTALL_DIR / "lars-robot-server.service"
     setup_systemd_service(service_file, SYSTEMD_TARGET)
 
     print("5. Setting up access points for robot server")
