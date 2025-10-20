@@ -116,9 +116,7 @@ def main():
     setup_systemd_service(service_file, SYSTEMD_TARGET)
 
     print("5. Setting up access points for robot server")
-    answer = input("Do you want to set up WiFi access points now? (y/n): ").strip().lower()
-    if answer == 'y':
-        setup_wifi_script()
+    setup_wifi_script()
 
     print("Installation complete.")
 
