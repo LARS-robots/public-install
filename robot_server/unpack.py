@@ -94,17 +94,31 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
 
 def render_systemd_service(template_path: Path, output_path: Path, service_user: str, install_dir: Path) -> None:
     """Render systemd service template (pure Python file operations)"""
-    log(f"Rendering systemd service for user={service_user}")
+    log(f"Rendering systemd service for user={service_user}, install_dir={install_dir}")
     try:
         with open(template_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
+        # Replace all placeholders
         content = content.replace("{{SERVICE_USER}}", service_user)
-        # No need to replace path since systemd service uses docker compose
+        content = content.replace("/home/{{SERVICE_USER}}/LARS", str(install_dir))
+        
+        # Verify replacement worked
+        if "{{SERVICE_USER}}" in content:
+            log("WARNING: Template still contains {{SERVICE_USER}} placeholder after replacement")
         
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
+        
         log(f"Service file created at {output_path}")
+        
+        # Debug: show first few lines
+        with open(output_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()[:15]
+            log("Generated service file preview:")
+            for line in lines:
+                log(f"  {line.rstrip()}")
+                
     except Exception as e:
         log(f"ERROR: Failed to render service file: {e}")
         sys.exit(1)
@@ -271,7 +285,7 @@ def main():
                     log("Service started")
                 else:
                     log("WARNING: Failed to start service")
-
+    
     if not args.skip_systemd:
         log("Check service: sudo systemctl status lars-robot-server")
 
