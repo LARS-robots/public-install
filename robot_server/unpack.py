@@ -14,12 +14,14 @@ Usage:
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import urllib.request
+import venv
 from pathlib import Path
 
 
@@ -92,33 +94,51 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
         sys.exit(1)
 
 
-def render_systemd_service(template_path: Path, output_path: Path, service_user: str, install_dir: Path) -> None:
-    """Render systemd service template (pure Python file operations)"""
+def get_venv_python(venv_dir: Path) -> Path:
+    if platform.system().lower().startswith("win"):
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def ensure_virtualenv(install_dir: Path) -> Path:
+    venv_dir = install_dir / ".venv"
+    python_bin = get_venv_python(venv_dir)
+    if python_bin.exists():
+        log(f"Virtualenv already present: {python_bin}")
+        return python_bin
+
+    log(f"Creating virtualenv at {venv_dir}")
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    venv.create(str(venv_dir), with_pip=True, clear=False, symlinks=True, system_site_packages=False)
+    python_bin = get_venv_python(venv_dir)
+    if not python_bin.exists():
+        log("ERROR: virtualenv created but python executable not found")
+        sys.exit(1)
+
+    log(f"Virtualenv ready: {python_bin}")
+    subprocess.run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip"], check=False)
+    return python_bin
+
+
+def render_systemd_service(template_path: Path, output_path: Path, service_user: str, install_dir: Path, python_bin: Path) -> None:
     log(f"Rendering systemd service for user={service_user}, install_dir={install_dir}")
     try:
-        with open(template_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Replace all placeholders
+        content = template_path.read_text(encoding="utf-8")
+        content = content.replace("{{INSTALL_DIR}}", str(install_dir))
+        content = content.replace("{{PYTHON_BIN}}", str(python_bin))
         content = content.replace("{{SERVICE_USER}}", service_user)
-        content = content.replace("/home/{{SERVICE_USER}}/LARS", str(install_dir))
-        
-        # Verify replacement worked
-        if "{{SERVICE_USER}}" in content:
-            log("WARNING: Template still contains {{SERVICE_USER}} placeholder after replacement")
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
+
+        if any(placeholder in content for placeholder in ("{{INSTALL_DIR}}", "{{PYTHON_BIN}}", "{{SERVICE_USER}}")):
+            log("ERROR: some placeholders were not replaced")
+            sys.exit(1)
+
+        output_path.write_text(content, encoding="utf-8")
         log(f"Service file created at {output_path}")
-        
-        # Debug: show first few lines
-        with open(output_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()[:15]
-            log("Generated service file preview:")
-            for line in lines:
-                log(f"  {line.rstrip()}")
-                
+
+        preview = output_path.read_text(encoding="utf-8").splitlines()[:15]
+        log("Generated service file preview:")
+        for line in preview:
+            log(f"  {line}")
     except Exception as e:
         log(f"ERROR: Failed to render service file: {e}")
         sys.exit(1)
@@ -262,13 +282,15 @@ def main():
         # Extract archive to installation directory
         extract_archive(archive_path, install_dir)
         
+        python_bin = ensure_virtualenv(install_dir)
+        
         if not args.skip_systemd:
             # Download and render systemd service
             service_template = tmppath / "lars-robot-server.service"
             download_file(SERVICE_TEMPLATE_URL, service_template)
             
             service_output = tmppath / "lars-robot-server-rendered.service"
-            render_systemd_service(service_template, service_output, service_user, install_dir)
+            render_systemd_service(service_template, service_output, service_user, install_dir, python_bin)
             
             # Install systemd service
             install_systemd_service(service_output)

@@ -1,25 +1,19 @@
 [Unit]
 Description=LARS Robot Server (API)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
-Type=simple
-User=
-Group=
-# Working directory for the API; repository is installed into /home/<user>/LARS
-WorkingDirectory=/home//LARS
-# Ensure the API package (services/api/src) is importable
+Type=oneshot
+RemainAfterExit=yes
+User={{SERVICE_USER}}
+Group={{SERVICE_USER}}
+WorkingDirectory={{INSTALL_DIR}}
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/home//LARS/services/api/src
+Environment=PYTHONPATH={{INSTALL_DIR}}/app
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
-# Run installer before starting the API (keeps existing behavior)
-ExecStartPre=/home//venv/bin/python /home//LARS/scripts/install.py --tag dev --write-env
-
-# Start the API web server directly from the venv (uvicorn)
-ExecStart=/home//venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
+ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/install.py --tag dev --write-env
 Restart=always
 RestartSec=2
 StandardOutput=journal
@@ -29,4 +23,4 @@ KillSignal=SIGINT
 TimeoutStopSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
