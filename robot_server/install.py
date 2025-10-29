@@ -1,124 +1,139 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-from pathlib import Path
-import requests
-import tarfile
-from io import BytesIO
-import venv
+"""
+LARS installer: local build with docker buildx (no registry), then compose up.
+
+- Builds image lars-api:<TAG> locally with `--load` (Windows/Linux).
+- No separate BuildKit container or builder creation is used.
+- Optionally writes .env (API_TAG=<TAG>) for compose.yml.
+- Optionally runs `docker compose up -d`.
+
+Usage examples:
+  python scripts/install.py --tag dev --write-env
+  python scripts/install.py --tag dev --no-up
+  python scripts/install.py --tag dev --platform linux/amd64
+"""
+
+from __future__ import annotations
+import argparse
+import os
+import platform
 import subprocess
-import shutil
+import sys
+from pathlib import Path
 
-# config
-GITHUB_REPO = "LARS-robots/public-install"
-ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/raw/main/robot_server/robot_server.tar.gz"
-INSTALL_DIR = Path.home() / "LARS"
-VENV_DIR = INSTALL_DIR / "venv"
-SYSTEMD_TARGET = Path("/etc/systemd/system/lars-robot-server.service")
+ROOT = Path(__file__).resolve().parents[1]  # project root (compose.yml here)
+API_DIR = ROOT / "services" / "api"
+DOCKERFILE = API_DIR / "Dockerfile"
 
-def run_cmd(commands):
-    return subprocess.run(commands, check=True)
+IMAGE_NAME = "lars-api"       # company tag
+DEFAULT_TAG = "dev"
 
-def download_and_extract(url, extract_to):
-    response = requests.get(url)
-    response.raise_for_status()
-    
-    with tarfile.open(fileobj=BytesIO(response.content), mode="r:gz") as tar:
-        tar.extractall(path=extract_to)
+def run(cmd: list[str], cwd: Path | None = None, check: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
+    print(f"$ {' '.join(cmd)}")
+    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=check, env=env)
 
-def reorganize_structure():
-    """Move files from app directory to robot_server directory structure"""
-    app_dir = INSTALL_DIR / "app"
-    robot_server_dir = INSTALL_DIR / "robot_server"
-    
-    if app_dir.exists():
-        print("Moving files from app/ to robot_server/")
-        
-        # Create robot_server directory if it doesn't exist
-        robot_server_dir.mkdir(exist_ok=True)
-        
-        # Move all contents from app/ to robot_server/
-        for item in app_dir.iterdir():
-            dest = robot_server_dir / item.name
-            if dest.exists():
-                if dest.is_dir():
-                    shutil.rmtree(dest)
-                else:
-                    dest.unlink()
-            
-            if item.is_dir():
-                shutil.copytree(item, dest)
+def ensure_docker() -> None:
+    try:
+        run(["docker", "version"], check=True)
+    except Exception as e:
+        print("❌ Docker не найден или не запущен. Установи/запусти Docker Desktop (Windows) или Docker Engine (Linux).")
+        raise e
+
+def ensure_buildx_available() -> None:
+    try:
+        run(["docker", "buildx", "version"], check=True)
+    except Exception as e:
+        print("❌ Docker Buildx недоступен. Требуется Docker ≥ 20.10 (Compose v2).")
+        raise e
+
+def detect_platform_arg(user_platform: str | None) -> list[str]:
+    """
+    Returns ["--platform", value] or [] if native is desired.
+    - Windows: default linux/amd64 (под Docker Desktop это предсказуемо)
+    - Linux/macOS: native by default; override with --platform if needed
+    """
+    if user_platform:
+        return ["--platform", user_platform]
+    sys_name = platform.system().lower()
+    if sys_name.startswith("win"):
+        return ["--platform", "linux/amd64"]
+    return []
+
+def write_env_file(tag: str) -> None:
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        with env_path.open("r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        out = []
+        replaced = False
+        for line in lines:
+            if line.startswith("API_TAG="):
+                out.append(f"API_TAG={tag}")
+                replaced = True
             else:
-                shutil.copy2(item, dest)
-        
-        # Remove the now-empty app directory
-        shutil.rmtree(app_dir)
-        print("Reorganization complete")
-    
-    # Also move any other files that should be in robot_server/
-    for file_name in ["requirements.txt", "main.py", "config.toml"]:
-        src = INSTALL_DIR / file_name
-        dest = robot_server_dir / file_name
-        if src.exists() and not dest.exists():
-            shutil.move(str(src), str(dest))
-            print(f"Moved {file_name} to robot_server/")
-
-def create_venv(venv_path):
-    venv.create(venv_path, with_pip=True)
-    python_exe = venv_path / "bin" / "python"
-    
-    run_cmd([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-    
-    run_cmd([str(python_exe), "-m", "pip", "install", "uv"])
-
-    # Look for requirements.txt in robot_server directory
-    requirements_path = INSTALL_DIR / "robot_server" / "requirements.txt"
-    
-    if requirements_path.exists():
-        try:
-            run_cmd([str(python_exe), "-m", "uv", "pip", "install", "-r", str(requirements_path)])
-        except subprocess.CalledProcessError:
-            run_cmd([str(python_exe), "-m", "pip", "install", "-r", str(requirements_path)])
+                out.append(line)
+        if not replaced:
+            out.append(f"API_TAG={tag}")
+        content = "\n".join(out) + "\n"
     else:
-        print(f"Warning: requirements.txt not found at {requirements_path}")
+        content = f"API_TAG={tag}\n"
+    env_path.write_text(content, encoding="utf-8")
+    print(f"✔ .env обновлён: API_TAG={tag}")
 
-def setup_systemd_service(service_path, target_path):
-    if not service_path.exists():
-        print(f"Service file {service_path} does not exist.")
-        return
-    run_cmd(["sudo", "cp", str(service_path), str(target_path)])
-    run_cmd(["sudo", "systemctl", "daemon-reload"])
-    run_cmd(["sudo", "systemctl", "enable", target_path.name])
-    run_cmd(["sudo", "systemctl", "start", target_path.name])
+def build_image(tag: str, platform_arg: list[str]) -> None:
+    if not DOCKERFILE.exists():
+        raise FileNotFoundError(f"Dockerfile не найден: {DOCKERFILE}")
+    cmd = ["docker", "buildx", "build"]
+    if platform_arg:
+        cmd += platform_arg
+    cmd += [
+        "-f", str(DOCKERFILE),
+        "-t", f"{IMAGE_NAME}:{tag}",
+        "--load",
+        str(API_DIR),
+    ]
+    run(cmd, cwd=ROOT)
 
+def compose_up(tag: str) -> None:
+    env = os.environ.copy()
+    env["API_TAG"] = tag
+    print(f"✳ Запуск docker compose (API_TAG={tag}, image={IMAGE_NAME}:{tag})")
+    run(["docker", "compose", "up"], cwd=ROOT, env=env)
 
-def setup_wifi_script():
-    wifi_script = INSTALL_DIR / "setup_wifi.py"
-    if wifi_script.exists():
-        run_cmd(["python3", str(wifi_script)])
-    else:
-        print(f"Warning: WiFi setup script not found at {wifi_script}")
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build lars-api locally with buildx and run compose (no registry).")
+    p.add_argument("--tag", default=DEFAULT_TAG, help="Image tag (default: dev)")
+    p.add_argument("--platform", default=None, help="linux/amd64, linux/arm64 ... (default: Windows=linux/amd64; Linux/Mac=native)")
+    p.add_argument("--no-up", action="store_true", help="Only build image, do not run docker compose up")
+    p.add_argument("--write-env", action="store_true", help="Write .env with API_TAG=<tag>")
+    return p.parse_args()
 
-def main():
-    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    
-    print("1. Downloading and extracting robot server")
-    download_and_extract(ARCHIVE_URL, INSTALL_DIR)
-    
-    print("2. Reorganizing directory structure")
-    reorganize_structure()
-    
-    print("3. Setting up virtual environment")
-    create_venv(VENV_DIR)
-    
-    print("4. Setting up systemd service")
+def main() -> None:
+    args = parse_args()
+    ensure_docker()
+    ensure_buildx_available()
 
-    service_file = INSTALL_DIR / "systemd" / "lars-robot-server.service"
-    setup_systemd_service(service_file, SYSTEMD_TARGET)
+    platform_arg = detect_platform_arg(args.platform)
+    print(f"✳ Платформа сборки: {args.platform or (platform_arg[-1] if platform_arg else 'native')}")
 
-    print("5. Setting up access points for robot server")
-    setup_wifi_script()
+    build_image(args.tag, platform_arg)
 
-    print("Installation complete.")
+    if args.write_env:
+        write_env_file(args.tag)
+
+    if not args.no_up:
+        compose_up(args.tag)
+
+    print("✔ Готово.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ Команда завершилась ошибкой (exit={e.returncode}). См. вывод выше.")
+        sys.exit(e.returncode)
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        sys.exit(1)
