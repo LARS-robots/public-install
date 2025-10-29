@@ -317,9 +317,88 @@ def systemd_start_service(service_name: str) -> bool:
         return False
 
 
+def systemd_stop_service(service_name: str) -> bool:
+    """Stop systemd service (only subprocess call needed)"""
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "stop", service_name],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        return True
+    except subprocess.CalledProcessError:
+        # Service might not be running, that's OK
+        return False
+
+
+def systemd_disable_service(service_name: str) -> bool:
+    """Disable systemd service (only subprocess call needed)"""
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "disable", service_name],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        return True
+    except subprocess.CalledProcessError:
+        # Service might not be enabled, that's OK
+        return False
+
+
+def remove_old_systemd_service() -> None:
+    """Remove old systemd service before installing new one"""
+    service_path = Path("/etc/systemd/system/lars-robot-server.service")
+    
+    if not service_path.exists():
+        log("No existing systemd service found")
+        return
+    
+    log("Found existing systemd service, removing it...")
+    
+    # Stop the service if running
+    log("Stopping old service...")
+    systemd_stop_service("lars-robot-server.service")
+    
+    # Disable the service
+    log("Disabling old service...")
+    systemd_disable_service("lars-robot-server.service")
+    
+    # Remove the service file
+    try:
+        subprocess.run(
+            ["sudo", "rm", "-f", str(service_path)],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        log("Old service file removed")
+    except subprocess.CalledProcessError as e:
+        log(f"WARNING: Failed to remove old service file: {e.stderr}")
+    
+    # Reset failed state (clear any cached errors)
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "reset-failed", "lars-robot-server.service"],
+            check=False,  # Don't fail if service doesn't exist
+            capture_output=True,
+            text=True
+        )
+    except subprocess.CalledProcessError:
+        pass
+    
+    # Reload systemd to clear cache
+    if systemd_daemon_reload():
+        log("Systemd daemon reloaded (old service removed)")
+
+
 def install_systemd_service(service_file: Path) -> None:
     """Install systemd service file"""
-    log("Installing systemd service")
+    log("Installing new systemd service")
+    
+    # First, remove any old service
+    remove_old_systemd_service()
     
     dest = Path("/etc/systemd/system/lars-robot-server.service")
     
@@ -331,7 +410,7 @@ def install_systemd_service(service_file: Path) -> None:
         log("ERROR: Failed to reload systemd daemon")
         sys.exit(1)
     
-    log("Systemd service installed")
+    log("✓ New systemd service installed successfully")
 
 
 def verify_install_dir(install_dir: Path, service_user: str) -> None:
@@ -380,7 +459,7 @@ def main():
             log("ERROR: Docker Compose is not available")
             log("Please install Docker Compose v2")
             sys.exit(1)
-        log("Docker prerequisites OK")
+        log("✓ Docker prerequisites OK")
     
     # Verify installation directory
     verify_install_dir(install_dir, service_user)
@@ -408,24 +487,25 @@ def main():
             service_output = tmppath / "lars-robot-server-rendered.service"
             render_systemd_service(service_template, service_output, service_user, install_dir, python_bin)
             
-            # Install systemd service
+            # Install systemd service (this will remove old one first)
             install_systemd_service(service_output)
             
             if args.enable:
                 log("Enabling and starting service")
                 
                 if systemd_enable_service("lars-robot-server.service"):
-                    log("Service enabled")
+                    log("✓ Service enabled")
                 else:
                     log("WARNING: Failed to enable service")
                 
                 if systemd_start_service("lars-robot-server.service"):
-                    log("Service started")
+                    log("✓ Service started")
                 else:
                     log("WARNING: Failed to start service")
     
     if not args.skip_systemd:
-        log("Check service: sudo systemctl status lars-robot-server")
+        log("1. Check service: sudo systemctl status lars-robot-server")
+        log("2. View logs: sudo journalctl -fu lars-robot-server")
 
 
 if __name__ == "__main__":

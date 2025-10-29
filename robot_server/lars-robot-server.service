@@ -4,7 +4,7 @@ After=network-online.target docker.service
 Wants=network-online.target docker.service
 
 [Service]
-Type=forking
+Type=simple
 User={{SERVICE_USER}}
 Group={{SERVICE_USER}}
 WorkingDirectory={{INSTALL_DIR}}
@@ -12,17 +12,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH={{INSTALL_DIR}}/services/api/src
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
-# Pre-start: ensure .env file is up-to-date
-ExecStartPre={{PYTHON_BIN}} {{INSTALL_DIR}}/install.py --tag dev --write-env --no-up
+# Start: run install.py which handles docker compose
+ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --write-env
 
-# Start: run docker compose in detached mode
-ExecStart=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml up -d
-
-# Stop: gracefully shutdown containers
+# Stop: shutdown containers
 ExecStop=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
-
-# Health check (optional): verify containers are running
-ExecReload=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml restart
 
 # Restart policy
 Restart=on-failure
