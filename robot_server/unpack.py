@@ -94,6 +94,119 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
         sys.exit(1)
 
 
+def restructure_extracted_files(install_dir: Path) -> None:
+    """
+    Restructure extracted files to match expected directory layout.
+    
+    The snapshot contains flat structure:
+    - app/
+    - config/
+    - camera_daemon/
+    - Dockerfile.api
+    - compose.yml
+    - etc.
+    
+    We need to create services/ structure:
+    - services/api/src/app/
+    - services/api/src/config/
+    - services/api/Dockerfile
+    - services/camera_daemon/
+    """
+    log("Restructuring files to match services/ layout")
+    
+    # Create services directory structure
+    services_dir = install_dir / "services"
+    services_dir.mkdir(exist_ok=True)
+    
+    api_dir = services_dir / "api"
+    api_dir.mkdir(exist_ok=True)
+    
+    api_src_dir = api_dir / "src"
+    api_src_dir.mkdir(exist_ok=True)
+    
+    # Move app/ to services/api/src/app/
+    if (install_dir / "app").exists():
+        log("Moving app/ to services/api/src/app/")
+        if (api_src_dir / "app").exists():
+            shutil.rmtree(api_src_dir / "app")
+        shutil.move(str(install_dir / "app"), str(api_src_dir / "app"))
+    
+    # Move config/ to services/api/src/config/
+    if (install_dir / "config").exists():
+        log("Moving config/ to services/api/src/config/")
+        if (api_src_dir / "config").exists():
+            shutil.rmtree(api_src_dir / "config")
+        shutil.move(str(install_dir / "config"), str(api_src_dir / "config"))
+    
+    # Move Dockerfile.api to services/api/Dockerfile
+    if (install_dir / "Dockerfile.api").exists():
+        log("Moving Dockerfile.api to services/api/Dockerfile")
+        dockerfile_dest = api_dir / "Dockerfile"
+        if dockerfile_dest.exists():
+            dockerfile_dest.unlink()
+        shutil.move(str(install_dir / "Dockerfile.api"), str(dockerfile_dest))
+    
+    # Move pyproject.toml and uv.lock to services/api/
+    for file in ["pyproject.toml", "uv.lock"]:
+        src = install_dir / file
+        if src.exists():
+            log(f"Moving {file} to services/api/")
+            dest = api_dir / file
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(src), str(dest))
+    
+    # Move camera_daemon/ to services/camera_daemon/
+    if (install_dir / "camera_daemon").exists():
+        log("Moving camera_daemon/ to services/camera_daemon/")
+        camera_dest = services_dir / "camera_daemon"
+        if camera_dest.exists():
+            shutil.rmtree(camera_dest)
+        shutil.move(str(install_dir / "camera_daemon"), str(camera_dest))
+    
+    # Create infra/nats/ structure
+    if (install_dir / "nats").exists():
+        log("Moving nats/ to infra/nats/")
+        infra_dir = install_dir / "infra"
+        infra_dir.mkdir(exist_ok=True)
+        nats_dest = infra_dir / "nats"
+        if nats_dest.exists():
+            shutil.rmtree(nats_dest)
+        shutil.move(str(install_dir / "nats"), str(nats_dest))
+    
+    # Create shared/ directories
+    shared_dir = install_dir / "shared"
+    shared_dir.mkdir(exist_ok=True)
+    
+    for subdir in ["data", "logs"]:
+        src = install_dir / subdir
+        dest = shared_dir / subdir
+        if src.exists() and src.is_dir():
+            log(f"Moving {subdir}/ to shared/{subdir}/")
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.move(str(src), str(dest))
+        else:
+            dest.mkdir(exist_ok=True)
+    
+    log("File restructuring complete")
+    
+    # Verify critical paths exist
+    required_paths = [
+        services_dir / "api" / "Dockerfile",
+        services_dir / "api" / "src" / "app",
+        services_dir / "api" / "src" / "config",
+        install_dir / "compose.yml",
+    ]
+    
+    for path in required_paths:
+        if not path.exists():
+            log(f"ERROR: Required path missing after restructure: {path}")
+            sys.exit(1)
+    
+    log("✓ All required paths verified")
+
+
 def get_venv_python(venv_dir: Path) -> Path:
     if platform.system().lower().startswith("win"):
         return venv_dir / "Scripts" / "python.exe"
@@ -281,6 +394,9 @@ def main():
         
         # Extract archive to installation directory
         extract_archive(archive_path, install_dir)
+        
+        # Restructure files to match services/ layout
+        restructure_extracted_files(install_dir)
         
         python_bin = ensure_virtualenv(install_dir)
         

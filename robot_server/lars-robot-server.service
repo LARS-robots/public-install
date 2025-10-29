@@ -1,26 +1,41 @@
 [Unit]
-Description=LARS Robot Server (API)
+Description=LARS Robot Server (API + Camera Daemon)
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=forking
 User={{SERVICE_USER}}
 Group={{SERVICE_USER}}
 WorkingDirectory={{INSTALL_DIR}}
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH={{INSTALL_DIR}}/app
+Environment=PYTHONPATH={{INSTALL_DIR}}/services/api/src
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
-ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/install.py --tag dev --write-env
-Restart=always
-RestartSec=2
+# Pre-start: ensure .env file is up-to-date
+ExecStartPre={{PYTHON_BIN}} {{INSTALL_DIR}}/install.py --tag dev --write-env --no-up
+
+# Start: run docker compose in detached mode
+ExecStart=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml up -d
+
+# Stop: gracefully shutdown containers
+ExecStop=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
+
+# Health check (optional): verify containers are running
+ExecReload=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml restart
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Logging
 StandardOutput=journal
 StandardError=journal
+
+# Shutdown behavior
 KillMode=mixed
-KillSignal=SIGINT
-TimeoutStopSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
