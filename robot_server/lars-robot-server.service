@@ -13,10 +13,9 @@ Environment=PYTHONPATH={{INSTALL_DIR}}/services/api/src
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
 # Start: run install.py which handles docker compose
-ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --write-env
-
-# Stop: shutdown containers
-ExecStop=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
+ExecStartPre=/home/master/LARS/.venv/bin/python /home/master/LARS/scripts/install.py --tag dev --write-env
+ExecStart=/usr/bin/docker compose -f /home/master/LARS/compose.yml up --build
+ExecStop=/usr/bin/docker compose -f /home/master/LARS/compose.yml down
 
 # Restart policy
 Restart=on-failure
