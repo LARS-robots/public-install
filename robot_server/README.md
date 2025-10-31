@@ -1,21 +1,39 @@
-    # LARS Robot Server Installation
+# LARS Robot Server
 
-    ## Quick Installation
+## Быстрая установка
+```bash
+curl -sSL https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/install.py | python3
+```
 
-    Install with one command (downloads and unpacks):
-    ```bash
-    curl -sSL https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/unpack.py | python3 - --user $(whoami)
-    ```
+## Альтернативная установка
+```bash
+wget https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/install.py
+python3 install.py
+# OR
+git clone https://github.com/LARS-robots/public-install.git
+cd public-install/robot_server
+python3 install.py
+```
 
-    ## Manual Installation
+## После установки
 
-    Download and run unpacker:
-    ```bash
-    wget https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/unpack.py
-    python3 unpack.py --user $(whoami)
-    ```
-    ---
+### Запуск через systemd
+```bash
+sudo systemctl start lars-robot-server
+sudo systemctl status lars-robot-server
+```
 
-    **Version**: dev-20251030-120133  
-    **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
-    **Source**: https://github.com/LARS-robots/LARS-gstreamer 
+### Ручной запуск
+```bash
+cd ~/LARS
+python3 -m uvicorn robot_server.app.main:app --host 0.0.0.0 --port 8081
+```
+
+## Настройки сети
+- **SSID**: LARSrobot
+- **Пароль**: LARSrobot1234
+- **IP робота**: 10.42.0.13:8081
+- **Веб-интерфейс**: http://10.42.0.13:8081/docs
+
+---
+Версия: dev-20251031-081746
