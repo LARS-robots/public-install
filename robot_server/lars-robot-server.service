@@ -13,9 +13,10 @@ Environment=PYTHONPATH={{INSTALL_DIR}}/services/api/src
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
 # Start: run install.py which handles docker compose
-ExecStartPre={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --write-env
-ExecStart=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml up --build
-ExecStop=/usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
+# First build images (no compose up), then run compose with platform detection
+ExecStartPre={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --write-env --no-up
+ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --compose-only
+ExecStop={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --down || /usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
 
 # Restart policy
 Restart=on-failure

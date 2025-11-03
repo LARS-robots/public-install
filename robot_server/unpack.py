@@ -205,6 +205,43 @@ def restructure_extracted_files(install_dir: Path) -> None:
             sys.exit(1)
     
     log("✓ All required paths verified")
+    
+    # Verify camera daemon critical paths exist
+    camera_daemon_paths = [
+        services_dir / "camera_daemon" / "Dockerfile",
+        services_dir / "camera_daemon" / "Dockerfile.rpi",
+        services_dir / "camera_daemon" / "main.py",
+        services_dir / "camera_daemon" / "requirements.txt",
+    ]
+    
+    missing_camera_files = []
+    for path in camera_daemon_paths:
+        if not path.exists():
+            missing_camera_files.append(path)
+    
+    if missing_camera_files:
+        log("WARNING: Some camera daemon files are missing:")
+        for path in missing_camera_files:
+            log(f"  - {path}")
+    else:
+        log("✓ All camera daemon files verified")
+    
+    # Verify compose override files exist (optional but should be present)
+    compose_overrides = [
+        services_dir / "camera_daemon" / "compose.rpi.yml",
+        services_dir / "camera_daemon" / "compose.linux.yml",
+        services_dir / "camera_daemon" / "compose.windows.yml",
+    ]
+    
+    found_overrides = []
+    for path in compose_overrides:
+        if path.exists():
+            found_overrides.append(path.name)
+    
+    if found_overrides:
+        log(f"✓ Found compose override files: {', '.join(found_overrides)}")
+    else:
+        log("WARNING: No compose override files found in camera_daemon/")
 
 
 def get_venv_python(venv_dir: Path) -> Path:
@@ -423,9 +460,15 @@ def verify_install_dir(install_dir: Path, service_user: str) -> None:
         try:
             test_file.touch()
             test_file.unlink()
+            log(f"✓ Write permission verified for {install_dir}")
         except PermissionError:
-            log(f"WARNING: No write permission to {install_dir}")
-            log(f"You may need to run: sudo chown -R {service_user}:{service_user} {install_dir}")
+            log(f"ERROR: No write permission to {install_dir}")
+            log(f"You need to fix permissions:")
+            log(f"  sudo chown -R {service_user}:{service_user} {install_dir}")
+            log(f"Or if the directory doesn't exist yet:")
+            log(f"  sudo mkdir -p {install_dir}")
+            log(f"  sudo chown -R {service_user}:{service_user} {install_dir}")
+            sys.exit(1)
     except Exception as e:
         log(f"ERROR: Failed to create installation directory: {e}")
         sys.exit(1)
