@@ -22,6 +22,7 @@ import tarfile
 import tempfile
 import urllib.request
 import venv
+from datetime import datetime
 from pathlib import Path
 
 
@@ -450,6 +451,143 @@ def install_systemd_service(service_file: Path) -> None:
     log("✓ New systemd service installed successfully")
 
 
+def detect_robot_type(install_dir: Path, cli_override: str | None = None, no_heuristics: bool = False) -> tuple[str, str]:
+    """
+    Detect robot type with precedence:
+    1. CLI flag (--robot-type)
+    2. Config files (motor_daemon/config.toml, then API config)
+    3. Hardware heuristics (if not disabled)
+    
+    Returns: (robot_type, detection_source)
+    """
+    SUPPORTED_TYPES = ("simulator", "raspbot", "diktum")
+    
+    # 1. CLI override (highest priority)
+    if cli_override:
+        robot_type = cli_override.lower().strip()
+        if robot_type not in SUPPORTED_TYPES:
+            log(f"ERROR: Invalid robot type '{robot_type}'. Supported: {', '.join(SUPPORTED_TYPES)}")
+            sys.exit(1)
+        return robot_type, "CLI flag"
+    
+    # 2. Check config files (motor_daemon/config.toml first, then API config)
+    config_paths = [
+        install_dir / "services" / "motor_daemon" / "config.toml",
+        install_dir / "services" / "api" / "src" / "config" / "config.toml",
+        install_dir / "config.toml",
+    ]
+    
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                try:
+                    import tomllib
+                except ImportError:
+                    import tomli as tomllib
+                
+                with open(config_path, "rb") as f:
+                    config = tomllib.load(f)
+                    default_section = config.get("default", {})
+                    robot_type = default_section.get("robot_type", "").lower().strip()
+                    if robot_type in SUPPORTED_TYPES:
+                        return robot_type, f"config file ({config_path.relative_to(install_dir)})"
+            except Exception as e:
+                log(f"WARNING: Could not read robot_type from {config_path}: {e}")
+                continue
+    
+    # 3. Hardware heuristics (if enabled)
+    if not no_heuristics:
+        # Check for Raspberry Pi
+        try:
+            model_path = Path("/proc/device-tree/model")
+            if model_path.exists():
+                model_text = model_path.read_text().lower()
+                if "raspberry pi" in model_text:
+                    # Default to diktum for RPi (most common)
+                    return "diktum", "hardware detection (Raspberry Pi)"
+            
+            cpuinfo_path = Path("/proc/cpuinfo")
+            if cpuinfo_path.exists():
+                cpuinfo_text = cpuinfo_path.read_text().lower()
+                if "raspberry pi" in cpuinfo_text:
+                    return "diktum", "hardware detection (Raspberry Pi)"
+        except Exception:
+            pass
+    
+    # Default fallback
+    return "simulator", "default fallback"
+
+
+def write_robot_env(robot_type: str, detection_source: str) -> bool:
+    """
+    Write robot type to /etc/lars/robot.env.
+    Creates directory if missing, backs up existing file if malformed.
+    Returns True on success, False on failure.
+    """
+    env_dir = Path("/etc/lars")
+    env_file = env_dir / "robot.env"
+    
+    # Create directory if missing
+    try:
+        env_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+    except PermissionError:
+        log(f"ERROR: Cannot create {env_dir}. Run with sudo.")
+        return False
+    except Exception as e:
+        log(f"ERROR: Failed to create {env_dir}: {e}")
+        return False
+    
+    # Check if existing file is valid
+    if env_file.exists():
+        try:
+            existing_content = env_file.read_text(encoding="utf-8").strip()
+            existing_type = None
+            for line in existing_content.splitlines():
+                if line.startswith("ROBOT_TYPE="):
+                    existing_type = line.split("=", 1)[1].strip().strip('"\'')
+                    break
+            
+            # If existing file has same value, skip write (idempotent)
+            if existing_type == robot_type:
+                log(f"✓ Robot type already set to '{robot_type}' in {env_file}")
+                return True
+            
+            # Backup existing file if different
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_file = env_dir / f"robot.env.bak.{timestamp}"
+            try:
+                shutil.copy2(env_file, backup_file)
+                log(f"Backed up existing {env_file} to {backup_file}")
+            except Exception as e:
+                log(f"WARNING: Could not backup existing env file: {e}")
+        except Exception as e:
+            log(f"WARNING: Could not read existing {env_file}: {e}")
+            # Backup malformed file
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_file = env_dir / f"robot.env.bak.{timestamp}"
+            try:
+                shutil.copy2(env_file, backup_file)
+                log(f"Backed up malformed {env_file} to {backup_file}")
+            except Exception:
+                pass
+    
+    # Write new env file
+    try:
+        content = f"# Robot type detected by: {detection_source}\n"
+        content += f"ROBOT_TYPE={robot_type}\n"
+        env_file.write_text(content, encoding="utf-8")
+        # Set strict permissions (readable by all, writable by root only)
+        env_file.chmod(0o644)
+        log(f"✓ Wrote ROBOT_TYPE={robot_type} to {env_file} (detected via: {detection_source})")
+        return True
+    except PermissionError:
+        log(f"ERROR: Cannot write to {env_file}. Run with sudo.")
+        return False
+    except Exception as e:
+        log(f"ERROR: Failed to write {env_file}: {e}")
+        return False
+
+
 def verify_install_dir(install_dir: Path, service_user: str) -> None:
     """Verify installation directory exists and has correct permissions"""
     try:
@@ -478,6 +616,8 @@ def main():
     parser = argparse.ArgumentParser(description="LARS Robot Server Unpacker")
     parser.add_argument("--user", required=True, help="System user to run the service")
     parser.add_argument("--install-dir", help="Installation directory (default: /home/<user>/LARS)")
+    parser.add_argument("--robot-type", help="Override robot type (simulator|raspbot|diktum)")
+    parser.add_argument("--no-heuristics", action="store_true", help="Disable hardware detection fallback")
     parser.add_argument("--enable", action="store_true", help="Enable and start systemd service after install")
     parser.add_argument("--skip-systemd", action="store_true", help="Skip systemd service installation")
     parser.add_argument("--skip-docker-check", action="store_true", help="Skip Docker prerequisite check")
@@ -520,6 +660,15 @@ def main():
         # Restructure files to match services/ layout
         restructure_extracted_files(install_dir)
         
+        # Detect robot type and write to /etc/lars/robot.env
+        log("Detecting robot type...")
+        robot_type, detection_source = detect_robot_type(install_dir, args.robot_type, args.no_heuristics)
+        log(f"Detected robot type: {robot_type} (via {detection_source})")
+        
+        if not write_robot_env(robot_type, detection_source):
+            log("ERROR: Failed to write robot type configuration")
+            sys.exit(1)
+        
         python_bin = ensure_virtualenv(install_dir)
         
         if not args.skip_systemd:
@@ -533,6 +682,12 @@ def main():
             # Install systemd service (this will remove old one first)
             install_systemd_service(service_output)
             
+            # Reload systemd to pick up new env file
+            if systemd_daemon_reload():
+                log("✓ Systemd daemon reloaded")
+            else:
+                log("WARNING: Failed to reload systemd daemon")
+            
             if args.enable:
                 log("Enabling and starting service")
                 
@@ -541,14 +696,39 @@ def main():
                 else:
                     log("WARNING: Failed to enable service")
                 
-                if systemd_start_service("lars-robot-server.service"):
-                    log("✓ Service started")
-                else:
-                    log("WARNING: Failed to start service")
+                # Try to restart if already running, otherwise start
+                try:
+                    result = subprocess.run(
+                        ["sudo", "systemctl", "is-active", "lars-robot-server.service"],
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if result.returncode == 0:
+                        # Service is running, restart it
+                        subprocess.run(
+                            ["sudo", "systemctl", "try-restart", "lars-robot-server.service"],
+                            check=False,
+                            capture_output=True
+                        )
+                        log("✓ Service restarted")
+                    else:
+                        # Service not running, start it
+                        if systemd_start_service("lars-robot-server.service"):
+                            log("✓ Service started")
+                        else:
+                            log("WARNING: Failed to start service")
+                except Exception as e:
+                    log(f"WARNING: Could not check/restart service: {e}")
+                    if systemd_start_service("lars-robot-server.service"):
+                        log("✓ Service started")
+                    else:
+                        log("WARNING: Failed to start service")
     
     if not args.skip_systemd:
         log("1. Check service: sudo systemctl status lars-robot-server")
         log("2. View logs: sudo journalctl -fu lars-robot-server")
+        log(f"3. Robot type: {robot_type} (configured in /etc/lars/robot.env)")
 
 
 if __name__ == "__main__":

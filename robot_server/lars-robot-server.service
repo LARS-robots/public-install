@@ -1,5 +1,5 @@
 [Unit]
-Description=LARS Robot Server (API + Camera Daemon)
+Description=LARS Robot Server (API + Camera Daemon + Motion Daemon)
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
@@ -11,22 +11,20 @@ WorkingDirectory={{INSTALL_DIR}}
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH={{INSTALL_DIR}}/services/api/src
 Environment=GPIOZERO_PIN_FACTORY=lgpio
+Environment=API_TAG=dev
+# Load robot type from env file (written by unpack.py)
+EnvironmentFile=/etc/lars/robot.env
 
-# Start: run install.py which handles docker compose
-# First build images (no compose up), then run compose with platform detection
-ExecStartPre={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --write-env --no-up
-ExecStart={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --compose-only
-ExecStop={{PYTHON_BIN}} {{INSTALL_DIR}}/scripts/install.py --tag dev --down || /usr/bin/docker compose -f {{INSTALL_DIR}}/compose.yml down
+# Start all services
+ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py up {{INSTALL_DIR}}
 
-# Restart policy
+# Stop all services
+ExecStop=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py down {{INSTALL_DIR}}
+
 Restart=on-failure
 RestartSec=10
-
-# Logging
 StandardOutput=journal
 StandardError=journal
-
-# Shutdown behavior
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
