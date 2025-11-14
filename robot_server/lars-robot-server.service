@@ -4,7 +4,8 @@ After=network-online.target docker.service
 Wants=network-online.target docker.service
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User={{SERVICE_USER}}
 Group={{SERVICE_USER}}
 WorkingDirectory={{INSTALL_DIR}}
