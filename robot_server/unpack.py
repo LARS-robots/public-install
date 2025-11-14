@@ -165,6 +165,14 @@ def restructure_extracted_files(install_dir: Path) -> None:
             shutil.rmtree(camera_dest)
         shutil.move(str(install_dir / "camera_daemon"), str(camera_dest))
     
+    # Move motor_daemon/ to services/motor_daemon/
+    if (install_dir / "motor_daemon").exists():
+        log("Moving motor_daemon/ to services/motor_daemon/")
+        motor_dest = services_dir / "motor_daemon"
+        if motor_dest.exists():
+            shutil.rmtree(motor_dest)
+        shutil.move(str(install_dir / "motor_daemon"), str(motor_dest))
+    
     # Create infra/nats/ structure
     if (install_dir / "nats").exists():
         log("Moving nats/ to infra/nats/")
