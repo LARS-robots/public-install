@@ -173,6 +173,29 @@ def restructure_extracted_files(install_dir: Path) -> None:
             shutil.rmtree(motor_dest)
         shutil.move(str(install_dir / "motor_daemon"), str(motor_dest))
     
+    # Move logger/ to services/logger/ (if exists in flat structure)
+    if (install_dir / "logger").exists():
+        log("Moving logger/ to services/logger/")
+        logger_dest = services_dir / "logger"
+        if logger_dest.exists():
+            shutil.rmtree(logger_dest)
+        shutil.move(str(install_dir / "logger"), str(logger_dest))
+    
+    # Move nats_logger/ to services/nats_logger/ (if exists in flat structure)
+    if (install_dir / "nats_logger").exists():
+        log("Moving nats_logger/ to services/nats_logger/")
+        nats_logger_dest = services_dir / "nats_logger"
+        if nats_logger_dest.exists():
+            shutil.rmtree(nats_logger_dest)
+        shutil.move(str(install_dir / "nats_logger"), str(nats_logger_dest))
+    
+    # Handle services/ structure (if already in services/ from snapshot)
+    # This handles the case where workflow copies directly to services/logger/ and services/nats_logger/
+    if (install_dir / "services" / "logger").exists():
+        log("✓ Logger daemon found in services/logger/")
+    if (install_dir / "services" / "nats_logger").exists():
+        log("✓ nats_logger found in services/nats_logger/")
+    
     # Create infra/nats/ structure
     if (install_dir / "nats").exists():
         log("Moving nats/ to infra/nats/")
