@@ -16,6 +16,6 @@
     ```
     ---
 
-    **Version**: dev-20251118-221720  
+    **Version**: dev-20251118-223038  
     **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
     **Source**: https://github.com/LARS-robots/LARS-gstreamer 
