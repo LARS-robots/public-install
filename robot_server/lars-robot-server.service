@@ -26,6 +26,8 @@ Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+
+# Shutdown behavior
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
