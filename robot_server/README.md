@@ -13,6 +13,6 @@
     python3 unpack.py --user $(whoami)
                   ---
 
-    **Version**: dev-20251215-110811  
+    **Version**: dev-20251215-122424  
     **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
     **Source**: https://github.com/LARS-robots/LARS-gstreamer 

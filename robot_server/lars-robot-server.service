@@ -16,11 +16,11 @@ Environment=API_TAG=dev
 # Load robot type from env file (written by unpack.py)
 EnvironmentFile=/etc/lars/robot.env
 
-# Start all services
-ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py {{INSTALL_DIR}} --dev up
+# Start all services (action must be first: up, then root_dir, then --dev)
+ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py up {{INSTALL_DIR}} --dev
 
-# Stop all services
-ExecStop=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py {{INSTALL_DIR}} --dev down
+# Stop all services (action must be first: down, then root_dir, then --dev)
+ExecStop=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py down {{INSTALL_DIR}} --dev
 
 Restart=on-failure
 RestartSec=10

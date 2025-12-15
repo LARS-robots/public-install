@@ -138,6 +138,13 @@ def restructure_extracted_files(install_dir: Path) -> None:
         if (api_src_dir / "config").exists():
             shutil.rmtree(api_src_dir / "config")
         shutil.move(str(install_dir / "config"), str(api_src_dir / "config"))
+        
+        # Create symlink at root config/ for compose.yml volume mount
+        # compose.yml expects ./config:/app/src/config:ro
+        root_config_link = install_dir / "config"
+        if not root_config_link.exists():
+            log("Creating symlink config/ -> services/api/src/config/")
+            root_config_link.symlink_to("services/api/src/config")
     
     # Move Dockerfile.api to services/api/Dockerfile
     if (install_dir / "Dockerfile.api").exists():
