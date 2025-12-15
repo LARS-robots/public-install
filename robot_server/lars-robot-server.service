@@ -17,10 +17,10 @@ Environment=API_TAG=dev
 EnvironmentFile=/etc/lars/robot.env
 
 # Start all services
-ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py up {{INSTALL_DIR}}
+ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py {{INSTALL_DIR}} --dev up
 
 # Stop all services
-ExecStop=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py down {{INSTALL_DIR}}
+ExecStop=/usr/bin/python3 {{INSTALL_DIR}}/scripts/compose_service.py {{INSTALL_DIR}} --dev down
 
 Restart=on-failure
 RestartSec=10
