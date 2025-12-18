@@ -4,15 +4,15 @@
 
     Install with one command (downloads and unpacks):
  
-    curl -sSL https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/unpack.py | python3 - --user $(whoami)
+    curl -sSL https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/unpack.py | sudo python3 - --user $(whoami)
                   ## Manual Installation
 
     Download and run unpacker:
 
     wget https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/unpack.py
-    python3 unpack.py --user $(whoami)
+    sudo python3 unpack.py --user $(whoami)
                   ---
 
-    **Version**: dev-20251218-081507  
+    **Version**: dev-20251218-082250  
     **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
     **Source**: https://github.com/LARS-robots/LARS-gstreamer 

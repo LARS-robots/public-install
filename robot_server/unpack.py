@@ -565,20 +565,35 @@ def write_robot_env(robot_type: str, detection_source: str) -> bool:
     env_dir = Path("/etc/lars")
     env_file = env_dir / "robot.env"
     
-    # Create directory if missing
-    try:
-        env_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
-    except PermissionError:
-        log(f"ERROR: Cannot create {env_dir}. Run with sudo.")
-        return False
-    except Exception as e:
-        log(f"ERROR: Failed to create {env_dir}: {e}")
-        return False
+    # Create directory if missing (using sudo)
+    if not env_dir.exists():
+        try:
+            subprocess.run(
+                ["sudo", "mkdir", "-p", str(env_dir)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            subprocess.run(
+                ["sudo", "chmod", "755", str(env_dir)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            log(f"ERROR: Cannot create {env_dir}: {e.stderr}")
+            return False
     
-    # Check if existing file is valid
+    # Check if existing file is valid (using sudo)
     if env_file.exists():
         try:
-            existing_content = env_file.read_text(encoding="utf-8").strip()
+            result = subprocess.run(
+                ["sudo", "cat", str(env_file)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            existing_content = result.stdout.strip()
             existing_type = None
             for line in existing_content.splitlines():
                 if line.startswith("ROBOT_TYPE="):
@@ -590,37 +605,67 @@ def write_robot_env(robot_type: str, detection_source: str) -> bool:
                 log(f"✓ Robot type already set to '{robot_type}' in {env_file}")
                 return True
             
-            # Backup existing file if different
+            # Backup existing file if different (using sudo)
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup_file = env_dir / f"robot.env.bak.{timestamp}"
             try:
-                shutil.copy2(env_file, backup_file)
+                subprocess.run(
+                    ["sudo", "cp", str(env_file), str(backup_file)],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
                 log(f"Backed up existing {env_file} to {backup_file}")
-            except Exception as e:
-                log(f"WARNING: Could not backup existing env file: {e}")
-        except Exception as e:
-            log(f"WARNING: Could not read existing {env_file}: {e}")
+            except subprocess.CalledProcessError as e:
+                log(f"WARNING: Could not backup existing env file: {e.stderr}")
+        except subprocess.CalledProcessError as e:
+            log(f"WARNING: Could not read existing {env_file}: {e.stderr}")
             # Backup malformed file
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup_file = env_dir / f"robot.env.bak.{timestamp}"
             try:
-                shutil.copy2(env_file, backup_file)
-                log(f"Backed up malformed {env_file} to {backup_file}")
+                subprocess.run(
+                    ["sudo", "cp", str(env_file), str(backup_file)],
+                    check=False,
+                    capture_output=True,
+                    text=True
+                )
             except Exception:
                 pass
     
-    # Write new env file
+    # Write new env file (using sudo)
     try:
         content = f"# Robot type detected by: {detection_source}\n"
         content += f"ROBOT_TYPE={robot_type}\n"
-        env_file.write_text(content, encoding="utf-8")
-        # Set strict permissions (readable by all, writable by root only)
-        env_file.chmod(0o644)
-        log(f"✓ Wrote ROBOT_TYPE={robot_type} to {env_file} (detected via: {detection_source})")
-        return True
-    except PermissionError:
-        log(f"ERROR: Cannot write to {env_file}. Run with sudo.")
-        return False
+        
+        # Write to temp file first, then move with sudo
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env') as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(content)
+        
+        try:
+            # Copy temp file to destination using sudo
+            subprocess.run(
+                ["sudo", "cp", str(tmp_path), str(env_file)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            # Set permissions
+            subprocess.run(
+                ["sudo", "chmod", "644", str(env_file)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            log(f"✓ Wrote ROBOT_TYPE={robot_type} to {env_file} (detected via: {detection_source})")
+            return True
+        finally:
+            # Clean up temp file
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
     except Exception as e:
         log(f"ERROR: Failed to write {env_file}: {e}")
         return False
