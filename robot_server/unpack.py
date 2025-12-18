@@ -138,7 +138,7 @@ def restructure_extracted_files(install_dir: Path) -> None:
         if (api_src_dir / "config").exists():
             shutil.rmtree(api_src_dir / "config")
         shutil.move(str(install_dir / "config"), str(api_src_dir / "config"))
-        
+    
         # Create symlink at root config/ for compose.yml volume mount
         # compose.yml expects ./config:/app/src/config:ro
         root_config_link = install_dir / "config"
