@@ -658,8 +658,8 @@ def write_robot_env(robot_type: str, detection_source: str) -> bool:
                 capture_output=True,
                 text=True
             )
-        log(f"✓ Wrote ROBOT_TYPE={robot_type} to {env_file} (detected via: {detection_source})")
-        return True
+            log(f"✓ Wrote ROBOT_TYPE={robot_type} to {env_file} (detected via: {detection_source})")
+            return True
         finally:
             # Clean up temp file
             try:
