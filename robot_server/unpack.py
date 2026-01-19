@@ -164,6 +164,14 @@ def restructure_extracted_files(install_dir: Path) -> None:
                 dest.unlink()
             shutil.move(str(src), str(dest))
     
+    # Move ui_dist/ to services/api/src/app/ui_dist/ (pre-built UI)
+    if (install_dir / "ui_dist").exists():
+        log("Moving ui_dist/ to services/api/src/app/ui_dist/")
+        ui_dist_dest = api_src_dir / "app" / "ui_dist"
+        if ui_dist_dest.exists():
+            shutil.rmtree(ui_dist_dest)
+        shutil.move(str(install_dir / "ui_dist"), str(ui_dist_dest))
+    
     # Move camera_daemon/ to services/camera_daemon/
     if (install_dir / "camera_daemon").exists():
         log("Moving camera_daemon/ to services/camera_daemon/")
