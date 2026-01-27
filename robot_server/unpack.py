@@ -17,10 +17,9 @@ def restructure(d: Path):
     api, api_src = s / "api", s / "api" / "src"
     api_src.mkdir(parents=True, exist_ok=True)
     
-    # Move API files
+    # Move API files (but NOT config - it stays in root)
     for src, dst in [
         (d / "app", api_src / "app"),
-        (d / "config", api_src / "config"),
         (d / "Dockerfile.api", api / "Dockerfile"),
         (d / "ui_dist", api_src / "app" / "ui_dist"),
     ]:
@@ -29,13 +28,22 @@ def restructure(d: Path):
                 shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
             shutil.move(str(src), str(dst))
     
+    # Keep config in root (don't move it)
+    # Config is already in root from snapshot, just ensure it exists
+    if not (d / "config").exists():
+        (d / "config").mkdir(exist_ok=True)
+    
+    # Keep env in root (don't move it)
+    # Env is already in root from snapshot, just ensure it exists
+    if not (d / "env").exists():
+        (d / "env").mkdir(exist_ok=True)
+    
     for f in ["pyproject.toml", "uv.lock"]:
         if (d / f).exists():
             shutil.move(str(d / f), str(api / f))
     
-    # Config symlink
-    if not (d / "config").exists() and (api_src / "config").exists():
-        (d / "config").symlink_to("services/api/src/config")
+    # Remove old config symlink logic (no longer needed)
+    # Config stays in root now
     
     # Move daemons
     for daemon in ["camera_daemon", "motor_daemon", "logger", "nats_logger"]:
