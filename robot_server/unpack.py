@@ -17,7 +17,7 @@ def restructure(d: Path):
     api, api_src = s / "api", s / "api" / "src"
     api_src.mkdir(parents=True, exist_ok=True)
     
-    # Move API files (but NOT config - it stays in root)
+    # Move API files (config and env stay in root)
     for src, dst in [
         (d / "app", api_src / "app"),
         (d / "Dockerfile.api", api / "Dockerfile"),
@@ -27,23 +27,20 @@ def restructure(d: Path):
             if dst.exists():
                 shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
             shutil.move(str(src), str(dst))
-    
-    # Keep config in root (don't move it)
-    # Config is already in root from snapshot, just ensure it exists
-    if not (d / "config").exists():
-        (d / "config").mkdir(exist_ok=True)
-    
-    # Keep env in root (don't move it)
-    # Env is already in root from snapshot, just ensure it exists
-    if not (d / "env").exists():
-        (d / "env").mkdir(exist_ok=True)
+            
+    # Update config and env (overwrite existing)
+    for dirname in ["config", "env"]:
+        src = d / dirname
+        if src.exists():
+            dst = d / dirname  # Stay in root
+            if dst.exists() and dst != src:  # If already exists separately
+                shutil.rmtree(dst)
+            if src != dst:  # Only move if different
+                shutil.move(str(src), str(dst))
     
     for f in ["pyproject.toml", "uv.lock"]:
         if (d / f).exists():
             shutil.move(str(d / f), str(api / f))
-    
-    # Remove old config symlink logic (no longer needed)
-    # Config stays in root now
     
     # Move daemons
     for daemon in ["camera_daemon", "motor_daemon", "logger", "nats_logger"]:
@@ -69,9 +66,8 @@ def restructure(d: Path):
     shared.mkdir(exist_ok=True)
     for subdir in ["data", "logs"]:
         if (d / subdir).exists():
-            shutil.move(str(d / subdir), str(shared / subdir))
-        else:
-            (shared / subdir).mkdir(exist_ok=True)
+            shutil.rmtree(shared / subdir)
+        shutil.move(str(d / subdir), str(shared / subdir))
 
 if __name__ == "__main__":
     # Auto-detect install directory: use arg, or default to /home/{user}/LARS
