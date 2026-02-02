@@ -18,6 +18,6 @@
     python3 update.py /path/to/install/dir
                   ---
 
-    **Version**: dev-20260129-124327  
-    **Build Date**: 2026-01-29 12:43:33 UTC  
+    **Version**: dev-20260202-103148  
+    **Build Date**: 2026-02-02 10:31:53 UTC  
     **Source**: https://github.com/LARS-robots/LARS-gstreamer 
