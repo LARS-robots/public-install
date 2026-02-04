@@ -61,13 +61,42 @@ def restructure(d: Path):
         (d / "infra").mkdir(exist_ok=True)
         shutil.move(str(d / "nats"), str(d / "infra" / "nats"))
     
-    # Move data/logs to shared/
+    # Move data/logs to shared/ (best-effort, don't fail update on permissions)
     shared = d / "shared"
     shared.mkdir(exist_ok=True)
     for subdir in ["data", "logs"]:
-        if (d / subdir).exists():
-            shutil.rmtree(shared / subdir)
-        shutil.move(str(d / subdir), str(shared / subdir))
+        src = d / subdir
+        if not src.exists():
+            continue
+
+        dst = shared / subdir
+        if dst.exists():
+            try:
+                shutil.rmtree(dst)
+            except PermissionError:
+                print(f"[update] ! No permission to remove {dst}; skipping move for {subdir}")
+                try:
+                    shutil.rmtree(src)
+                except Exception:
+                    pass
+                continue
+            except Exception as e:
+                print(f"[update] ! Failed to remove {dst}: {e}; skipping move for {subdir}")
+                try:
+                    shutil.rmtree(src)
+                except Exception:
+                    pass
+                continue
+
+        try:
+            shutil.move(str(src), str(dst))
+        except PermissionError:
+            print(f"[update] ! No permission to move {src} -> {dst}; leaving as-is")
+        except Exception as e:
+            print(f"[update] ! Failed to move {src} -> {dst}: {e}")
+
+    (shared / "data").mkdir(exist_ok=True)
+    (shared / "logs").mkdir(exist_ok=True)
 
 if __name__ == "__main__":
     # Auto-detect install directory: use arg, or default to /home/{user}/LARS
