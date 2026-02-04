@@ -6,6 +6,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import subprocess
 from pathlib import Path
 
 URL = "https://raw.githubusercontent.com/LARS-robots/public-install/main/robot_server/robot_server_snapshot.tar.gz"
@@ -98,6 +99,59 @@ def restructure(d: Path):
     (shared / "data").mkdir(exist_ok=True)
     (shared / "logs").mkdir(exist_ok=True)
 
+
+def _render_service_template(template_path: Path, service_user: str, install_dir: Path) -> str:
+    content = template_path.read_text(encoding="utf-8")
+    return (
+        content.replace("{{SERVICE_USER}}", service_user)
+        .replace("{{INSTALL_DIR}}", str(install_dir))
+    )
+
+
+def install_systemd_services(install_dir: Path) -> None:
+    """Install systemd service templates to /etc/systemd/system (best-effort)."""
+    service_user = os.getenv("SUDO_USER") or os.getenv("USER") or os.getenv("USERNAME") or "robot"
+    templates = [
+        ("lars-robot-server.service", "LARS Robot Server"),
+        ("lars-updater.service", "LARS Update Daemon"),
+    ]
+
+    # Templates are expected at install root (copied by snapshot)
+    missing = []
+    for filename, _ in templates:
+        if not (install_dir / filename).exists():
+            missing.append(filename)
+
+    if missing:
+        print(f"[update] ! Missing systemd templates: {', '.join(missing)}")
+
+    if os.geteuid() != 0:
+        print("[update] ! Not running as root; skipping systemd install.")
+        print("[update]   To install services manually:")
+        for filename, _ in templates:
+            print(f"[update]   sudo cp {install_dir / filename} /etc/systemd/system/{filename}")
+        print("[update]   sudo systemctl daemon-reload")
+        print("[update]   sudo systemctl enable --now lars-robot-server lars-updater")
+        return
+
+    for filename, label in templates:
+        template_path = install_dir / filename
+        if not template_path.exists():
+            continue
+        try:
+            rendered = _render_service_template(template_path, service_user, install_dir)
+            dst = Path("/etc/systemd/system") / filename
+            dst.write_text(rendered, encoding="utf-8")
+            print(f"[update] ✓ Installed systemd unit: {label} ({dst})")
+        except Exception as e:
+            print(f"[update] ! Failed to install {filename}: {e}")
+
+    # Try reload (best-effort)
+    try:
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+    except Exception:
+        pass
+
 if __name__ == "__main__":
     # Auto-detect install directory: use arg, or default to /home/{user}/LARS
     if len(sys.argv) > 1:
@@ -119,5 +173,8 @@ if __name__ == "__main__":
         
         print(f"[update] Restructuring files...")
         restructure(install_dir)
+
+        print(f"[update] Installing systemd services...")
+        install_systemd_services(install_dir)
         
         print(f"[update] ✓ Update complete")

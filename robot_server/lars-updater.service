@@ -1,0 +1,21 @@
+[Unit]
+Description=LARS Update Daemon (local update trigger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+Group={{SERVICE_USER}}
+WorkingDirectory={{INSTALL_DIR}}
+Environment=PYTHONUNBUFFERED=1
+Environment=LARS_INSTALL_DIR={{INSTALL_DIR}}
+Environment=LARS_UPDATE_ALLOWED_NETS=127.0.0.0/8,::1/128,172.16.0.0/12
+ExecStart=/usr/bin/python3 {{INSTALL_DIR}}/scripts/update_daemon.py --host 0.0.0.0 --port 8769
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
