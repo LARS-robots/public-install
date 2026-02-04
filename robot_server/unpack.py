@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Downloads and extracts latest snapshot of robot server"""
 import os
+import pwd
 import shutil
 import sys
 import tarfile
@@ -157,8 +158,24 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         install_dir = Path(sys.argv[1])
     else:
-        user = os.getenv("USER") or os.getenv("USERNAME") or "robot"
-        install_dir = Path(f"/home/{user}/LARS")
+        # Prefer explicit env override
+        env_dir = os.getenv("LARS_INSTALL_DIR") or os.getenv("ROBOT_INSTALL_DIR")
+        if env_dir:
+            install_dir = Path(env_dir)
+        else:
+            # If running under sudo, target the invoking user, not root
+            sudo_user = os.getenv("SUDO_USER")
+            if sudo_user:
+                try:
+                    sudo_home = Path(pwd.getpwnam(sudo_user).pw_dir)
+                    install_dir = sudo_home / "LARS"
+                except Exception:
+                    install_dir = Path(f"/home/{sudo_user}/LARS")
+            else:
+                user = os.getenv("USER") or os.getenv("USERNAME") or "robot"
+                install_dir = Path(f"/home/{user}/LARS")
+        if os.geteuid() == 0 and os.getenv("SUDO_USER") and len(sys.argv) == 1:
+            print(f"[update] Note: running as root; installing for {os.getenv('SUDO_USER')} at {install_dir}")
     
     print(f"[update] Updating code in {install_dir}")
     
